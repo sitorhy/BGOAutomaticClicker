@@ -29,26 +29,26 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -71,8 +71,8 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>$(SolutionDir)opencv-4.10.0\opencv\build\include\opencv2;$(SolutionDir)opencv-4.10.0\opencv\build\include;$(IncludePath)</IncludePath>
-    <LibraryPath>$(SolutionDir)opencv-4.10.0\opencv\build\x64\vc16\lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>$(OPENCV_LIB_412)\build\include\opencv2;$(OPENCV_LIB_412)\build\include;$(IncludePath)</IncludePath>
+    <LibraryPath>$(OPENCV_LIB_412)\build\x64\vc16\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -106,24 +106,27 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)onnxruntime-win-x64-gpu-1.23.2\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ONNXRUNTIME_LIB)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>$(SolutionDir)opencv-4.10.0\opencv\build\x64\vc16\lib\opencv_world4100d.lib;$(SolutionDir)onnxruntime-win-x64-gpu-1.23.2\lib\onnxruntime_providers_cuda.lib;$(SolutionDir)onnxruntime-win-x64-gpu-1.23.2\lib\onnxruntime_providers_shared.lib;$(SolutionDir)onnxruntime-win-x64-gpu-1.23.2\lib\onnxruntime.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(OPENCV_LIB_412)\build\x64\vc16\lib\opencv_world4120d.lib;$(ONNXRUNTIME_LIB)\lib\onnxruntime_providers_cuda.lib;$(ONNXRUNTIME_LIB)\lib\onnxruntime_providers_shared.lib;$(ONNXRUNTIME_LIB)\lib\onnxruntime.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <InputResourceManifests>
       </InputResourceManifests>
     </Manifest>
     <PostBuildEvent>
-      <Command>:: 复制 ONNX Runtime GPU 版的核心 DLL
-xcopy /y /d "$(SolutionDir)onnxruntime-win-x64-gpu-1.23.2\lib\*.dll" "$(TargetDir)"
+      <Command>:: 复制 OpenCV DLL
+xcopy /y /d "$(OPENCV_LIB_412)\build\x64\vc16\bin\*.dll" "$(TargetDir)"
+
+:: 复制 ONNX Runtime GPU 版的核心 DLL
+xcopy /y /d "$(ONNXRUNTIME_LIB)\lib\*.dll" "$(TargetDir)"
 
 :: 复制 cuDNN 9 的所有相关 DLL
 
-xcopy /y /d "$(ProgramFiles)\NVIDIA\CUDNN\v9.17\bin\12.9\cudnn*.dll" "$(TargetDir)"
+xcopy /y /d "$(ProgramFiles)\NVIDIA\CUDNN\v9.19\bin\13.1\x64\cudnn*.dll" "$(TargetDir)"
 
 :: 复制字典和模型
 xcopy /y /d "$(SolutionDir)onnx_ocr_test\ch_PP-OCRv4_rec_infer.onnx" "$(TargetDir)"
