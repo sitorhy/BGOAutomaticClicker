@@ -1,0 +1,27 @@
+[project]
+name = "avatar-classifier-py-server"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "sitorhy", email = "sitorhy@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.53.0",
+    "numpy>=2.5.3",
+    "pillow>=12.3.0",
+    "scikit-learn>=1.9.0",
+    "scipy>=1.16.0",
+    "scipy-stubs~=1.18.1",
+    "torch>=2.14.0",
+    "torchvision>=0.29.0",
+]
+
+[project.scripts]
+avatar-classifier-py-server = "avatar_classifier_py_server.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
