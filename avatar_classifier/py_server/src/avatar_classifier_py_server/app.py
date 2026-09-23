@@ -46,7 +46,7 @@ class DetectAvatarRequest(BaseModel):
 
 @app.post("/detect/avatar")
 def detect_avatar_rect(req: DetectAvatarRequest) -> list[dict]:
-    from .detect import detect_avatar
+    from .detect_cv import detect_avatar
     from PIL import Image
 
     """

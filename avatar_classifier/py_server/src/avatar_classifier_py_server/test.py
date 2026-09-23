@@ -2,7 +2,6 @@ import unittest
 from pathlib import Path
 
 import numpy as np
-import matplotlib.pyplot as plt
 from PIL import Image, ImageDraw
 from scipy.signal import fftconvolve
 import cv2
@@ -19,6 +18,7 @@ class TestUnit(unittest.TestCase):
         
         # cv2.imread 在 Windows 上不支持中文路径，会静默返回 None
         # 解决方案：cv2.imdecode(np.fromfile(...)) 先读字节再解码
+        # np.uint8 指通道精度 2^8 = 256
         mask_img = cv2.imdecode(np.fromfile(mask_path, dtype=np.uint8), cv2.IMREAD_COLOR)
         template_img = cv2.imdecode(np.fromfile(template_path, dtype=np.uint8), cv2.IMREAD_COLOR)
         target_img = cv2.imdecode(np.fromfile(target_path, dtype=np.uint8), cv2.IMREAD_COLOR)
