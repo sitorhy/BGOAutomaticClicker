@@ -56,6 +56,13 @@ def detect_avatar(
     |	ndarray.base		|	如果内存来自其他对象，则为基础对象。		
     """
     # ── 掩码预处理：转灰度 → 二值化 → 归一化到 {0, 1} ──
+    # mask[:, :, :3] 是 NumPy 的多维数组切片语法，用于从掩码图像中只取前 3 个颜色通道（RGB）。
+    # 具体拆解：
+    # 维度	切片	含义
+    # 第 1 维 [:]	所有行	高度方向全部
+    # 第 2 维 [:]	所有列	宽度方向全部
+    # 第 3 维 [:3]	前 3 个通道	只取索引 0、1、2，即 R、G、B 三个通道
+    # numpy.mean 计算平均值 axis 计算三轴（RGB）平均值， 从 0 开始算, 2 就是 RGB 三个维度
     if mask.ndim == 3:
         mask_gray = np.mean(mask[:, :, :3], axis=2)
     else:
@@ -70,6 +77,7 @@ def detect_avatar(
         mask_binary = (np.asarray(mask_img, dtype=np.float64) > 127).astype(np.float64)
 
     # ── 模板灰度化 ──
+    # mean 结果元素是一个浮点数，表示该维度上的平均值
     tmpl_gray = template.mean(axis=2) if template.ndim == 3 else template.astype(np.float64)
     tmpl_f = tmpl_gray.astype(np.float64)
 
@@ -86,6 +94,9 @@ def detect_avatar(
         if new_h > th or new_w > tw:
             continue
 
+        # np.clip(tmpl_f, 0, 255) 把数组中的每个值限制在 [0, 255] 范围内
+        # tmpl_f 来自 template.mean(axis=2)——RGB 三通道求均值，结果理论上仍在 [0, 255] 内
+        # 但后续可能经过缩放（resize）——PIL 的双线性插值 BILINEAR 可能产生微小的浮点溢出（如 255.0001 或 -0.0001）
         tmpl_img = Image.fromarray(np.clip(tmpl_f, 0, 255).astype(np.uint8), mode="L")
         tmpl_img = tmpl_img.resize((new_w, new_h), Image.BILINEAR)
         scaled = np.asarray(tmpl_img, dtype=np.float64)
@@ -129,6 +140,10 @@ def detect_avatar(
         s_var_map = np.maximum(t_sq_map - t_sum_map ** 2 / n_s, 0.0)
         denominator = np.sqrt(s_var_map * t_var_s)
 
+        # NCC 分子 & 分母
+        #        cross - mt·t_sum/n
+        #  NCC = ─────────────────────────
+        #       sqrt(s_var × t_var)
         ncc_map = np.full_like(numerator, -2.0)
         valid = denominator > 1e-8
         ncc_map[valid] = numerator[valid] / denominator[valid]
