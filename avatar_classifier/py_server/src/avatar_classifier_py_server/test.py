@@ -1,33 +1,44 @@
+from os import PathLike
 import unittest
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw
 from scipy.signal import fftconvolve
+from typing_extensions import NotRequired  # <--- 从这里导入！
 import cv2
 
 """
 测试用例
 .venv/Scripts/python.exe -m unittest avatar_classifier_py_server.test.TestUnit.test_avatar_detect
 """
+
+
 class TestUnit(unittest.TestCase):
     def test_avatar_cv_detect(self):
-        mask_path = Path(__file__).parent.parent.parent / 'res' / 'test' / 'mooncell头像探测掩码.jpg'
-        template_path = Path(__file__).parent.parent.parent / 'res' / 'test' / 'Servant481.jpg'
-        target_path = Path(__file__).parent.parent.parent / 'res' / 'test' / '哈贝特洛特(Pretender)一破.png'
-        
+        mask_path = Path(__file__).parent.parent.parent / \
+            'res' / 'test' / 'mooncell头像探测掩码.jpg'
+        template_path = Path(__file__).parent.parent.parent / \
+            'res' / 'test' / 'Servant481.jpg'
+        target_path = Path(__file__).parent.parent.parent / \
+            'res' / 'test' / '哈贝特洛特(Pretender)一破.png'
+
         # cv2.imread 在 Windows 上不支持中文路径，会静默返回 None
         # 解决方案：cv2.imdecode(np.fromfile(...)) 先读字节再解码
         # np.uint8 指通道精度 2^8 = 256
-        mask_img = cv2.imdecode(np.fromfile(mask_path, dtype=np.uint8), cv2.IMREAD_COLOR)
-        template_img = cv2.imdecode(np.fromfile(template_path, dtype=np.uint8), cv2.IMREAD_COLOR)
-        target_img = cv2.imdecode(np.fromfile(target_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+        mask_img = cv2.imdecode(np.fromfile(
+            mask_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+        template_img = cv2.imdecode(np.fromfile(
+            template_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+        target_img = cv2.imdecode(np.fromfile(
+            target_path, dtype=np.uint8), cv2.IMREAD_COLOR)
 
         h, w = template_img.shape[:2]
 
         # 执行带掩码的模板匹配
         # 注意：带掩码时，必须使用 cv2.TM_SQDIFF 或 cv2.TM_CCORR_NORMED
-        result = cv2.matchTemplate(target_img, template_img, cv2.TM_CCORR_NORMED, mask=mask_img)
+        result = cv2.matchTemplate(
+            target_img, template_img, cv2.TM_CCORR_NORMED, mask=mask_img)
 
         # 获取最佳匹配位置
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
@@ -51,7 +62,6 @@ class TestUnit(unittest.TestCase):
 
         print(f"最佳匹配位置: {top_left} -> {bottom_right}")
 
-
         # 5. 绘制结果
         cv2.rectangle(target_img, top_left, bottom_right, (0, 255, 0), 2)
         cv2.imshow('Result', target_img)
@@ -59,7 +69,8 @@ class TestUnit(unittest.TestCase):
         cv2.destroyAllWindows()
 
     def test_avatar_detect(self):
-        mask_path = Path(__file__).parent.parent.parent / 'res' / 'test' / 'mooncell头像探测掩码.jpg'
+        mask_path = Path(__file__).parent.parent.parent / \
+            'res' / 'test' / 'mooncell头像探测掩码.jpg'
         mask_img = Image.open(mask_path)
         print(f"掩码图片尺寸: {mask_img.size}")
         print(f"掩码图片模式: {mask_img.mode}")
@@ -67,7 +78,7 @@ class TestUnit(unittest.TestCase):
 
         # Image.convert(mode) 用于把图像转换到指定的色彩模式（color mode）。
         # 参数 mode 是一个字符串，传入不同值表示不同的像素存储方式。
-        # 下面是 Pillow 常用取值及含义：    
+        # 下面是 Pillow 常用取值及含义：
         # "1"	二值图（纯黑纯白，阈值 128）	1 bit
         # "L"	灰度图（0=黑，255=白）	8 bit
         # "I"	32 位整型灰度	32 bit
@@ -96,20 +107,22 @@ class TestUnit(unittest.TestCase):
         mask_binary = (np.array(mask_grey) > 127).astype(np.float64)
 
         # 加载头像图片，和掩码图进行逻辑 &，白色（1）的不会保留，黑色（0）的部分过滤
-        template_path = Path(__file__).parent.parent.parent / 'res' / 'test' / 'Servant481.jpg'
+        template_path = Path(__file__).parent.parent.parent / \
+            'res' / 'test' / 'Servant481.jpg'
         template_img = Image.open(template_path)
         # template_img.show()
         print(f"模板图片色彩模式: {template_img.mode}")
         print(f"模板图片尺寸: {template_img.size}")
-        
+
         # 将掩码图缩放到模板图的大小（这里是一样的，省略掉）
-    
+
         # 掩码图和模板图进行逻辑与操作
         # 这里假设原图为 [128,255,129] (灰度，每个像素只有一个值)
         # [128,255,129] x [0,1,0]  =>
         # 128 * 0 + 255 * 1 + 129 * 0 => [0, 255, 0]
-        template_array = np.asarray(template_img.convert("L"), dtype=np.float64)
-        #template_mask_array = template_array * mask_binary
+        template_array = np.asarray(
+            template_img.convert("L"), dtype=np.float64)
+        # template_mask_array = template_array * mask_binary
         # template_mask_img = Image.fromarray(template_mask_array.astype(np.uint8))
         # template_mask_img.show()
 
@@ -132,12 +145,14 @@ class TestUnit(unittest.TestCase):
         # NCC 范围 [-1, 1]，1 表示完全匹配
 
         # 1. 加载目标图像（立绘）并灰度化
-        target_path = Path(__file__).parent.parent.parent / 'res' / 'test' / '哈贝特洛特(Pretender)一破.png'
+        target_path = Path(__file__).parent.parent.parent / \
+            'res' / 'test' / '哈贝特洛特(Pretender)一破.png'
         target_img = Image.open(target_path)
         target_gray = np.asarray(target_img.convert("L"), dtype=np.float64)
         print(f"目标图片尺寸: {target_img.size}")
 
-        mt_sum_s = float((mask_binary * template_array).sum())  # Σ(mask × scaled_tmpl) 当前尺度
+        mt_sum_s = float((mask_binary * template_array).sum()
+                         )  # Σ(mask × scaled_tmpl) 当前尺度
         mt2_sum_s = float((mask_binary * template_array ** 2).sum())
         n_s = max(float(mask_binary.sum()), 1e-8)
         t_var_s = max(mt2_sum_s - mt_sum_s ** 2 / n_s, 0.0)
@@ -185,8 +200,124 @@ class TestUnit(unittest.TestCase):
         print(f"最佳匹配分值: {result}")
 
         vis = target_img.copy()
-        ImageDraw.Draw(vis).rectangle([best_x, best_y, best_x + template_array.shape[1], best_y + template_array.shape[0]], outline=(255, 0, 0), width=2)
+        ImageDraw.Draw(vis).rectangle([best_x, best_y, best_x + template_array.shape[1],
+                                       best_y + template_array.shape[0]], outline=(255, 0, 0), width=2)
         vis.show()
+
+    def test_pic_merge(self):
+        # 裁剪位置 (192, 140) -> (324, 284)
+        target_path = Path(__file__).parent.parent.parent / \
+            'res' / 'test' / '哈贝特洛特(Pretender)一破.png'
+        target_img = cv2.imdecode(np.fromfile(target_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        # cv2.imshow('img_target', target_img)
+        # cv2.waitKey(0)
+        # v2.destroyAllWindows()
+        target_img_clip = target_img[140:284, 192:324]
+        # cv2.imshow('img_target_clip', target_img_clip)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
+        if target_img_clip.shape[2] == 4:
+            target_img_clip = cv2.cvtColor(target_img_clip, cv2.COLOR_BGRA2RGBA)
+        else:
+            target_img_clip = cv2.cvtColor(target_img_clip, cv2.COLOR_BGR2RGB)
+        
+
+        # 创建背景图，用黑色底填充，大小与裁剪区域相同
+        blank_img = Image.new(
+            'RGBA', (target_img_clip.shape[1], target_img_clip.shape[0]), (0, 0, 0, 255))
+        # blank_img.show()
+
+        # 验证数据
+        # cv2.imshow('blank_img', cv2.cvtColor(np.asarray(blank_img), cv2.COLOR_RGBA2BGRA))
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
+
+        # 图层配置拟定
+        layers = [
+            {
+                'name': 'background',  # 唯一标识， 动态修改配置时可能会用到
+                'template': np.asarray(blank_img)
+            },
+            {
+                'name': 'frame',
+                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L0_金框.png',
+            },
+            {
+                'name': 'avatar',
+                'mask': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'BGO头像裁剪掩码.png',
+                'template': target_img_clip,
+            },
+            {
+                'name': 'stars',
+                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星.png',
+            },
+            {
+                'name': 'status',
+                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_满破标.png',
+            },
+            {
+                'name': 'class',
+                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'Breakser.png',
+            },
+            {
+                'name': 'label',
+                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_金标.png',
+            },
+        ]
+        merge_layers(layers)
+
+
+def parse_layer_image(template: PathLike | str | np.ndarray | None):
+    if isinstance(template, np.ndarray):
+        # 调用方传入的 ndarray 应已是 RGB(A) 格式，不做通道转换
+        return template
+    if isinstance(template, str | PathLike):
+        nd_arr = cv2.imdecode(np.fromfile(
+            template, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        # cv2.imdecode 返回 BGR(A) 通道顺序，需转为 RGB(A) 才能被 PIL 正确解读
+        # x轴y轴位置和颜色数据三个维度 ndim = 3,  shape 为 [高，宽，通道数]
+        if nd_arr.ndim == 3 and nd_arr.shape[2] == 4:
+            nd_arr = cv2.cvtColor(nd_arr, cv2.COLOR_BGRA2RGBA)
+        elif nd_arr.ndim == 3 and nd_arr.shape[2] == 3:
+            nd_arr = cv2.cvtColor(nd_arr, cv2.COLOR_BGR2RGB)
+        return nd_arr
+    return None
+
+
+def merge_layers(layers: list[{'name': NotRequired[str] | None, 'template': np.ndarray | PathLike | str}, 'mask': np.ndarray | PathLike | str]):
+    canvas: np.ndarray | None = None
+    for layer in layers:
+        template_nd_arr = parse_layer_image(layer['template'])
+        print(
+            f"Layer: {layer['name'] if 'name' in layer else 'anonymous'}, Template: {template_nd_arr.shape}")
+
+        """ 创建画布 ，以第一幅图的大小为基准 """
+        if canvas is None:
+            canvas = Image.new(
+                'RGBA', (template_nd_arr.shape[1], template_nd_arr.shape[0]), (0, 0, 0, 0))
+
+        """ 将图层绘制到画布上 """
+        template_img = Image.fromarray(template_nd_arr)
+        # alpha_composite 要求两张图模式一致（均为 RGBA），需转换
+        if template_img.mode != 'RGBA':
+            template_img = template_img.convert('RGBA')
+        # template_img.show()
+
+        if 'mask' in layer:
+            mask = Image.open(layer['mask']).convert('L')
+            if mask.size != template_img.size:
+                mask = mask.resize(template_img.size)
+            template_img.putalpha(mask)
+
+        # 如果所有图层尺寸一致，可直接合成；否则需要中间层兜底尺寸差异
+        if template_img.size == canvas.size:
+            canvas = Image.alpha_composite(canvas, template_img)
+        else:
+            temp_layer = Image.new('RGBA', canvas.size, (0, 0, 0, 0))
+            temp_layer.paste(template_img, (0, 0))
+            canvas = Image.alpha_composite(canvas, temp_layer)
+
+    canvas.save(Path(__file__).parent.parent.parent / 'temp' / 'output.png')
 
 
 if __name__ == '__main__':

@@ -219,3 +219,5 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 /src/avatar_classifier_py_server/temp/
+temp
+temp/

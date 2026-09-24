@@ -52,15 +52,15 @@ def detect_avatar_rect(req: DetectAvatarRequest) -> list[dict]:
     """
     读出来的图像是RGBA四通道的，A通道为透明通道，该对深度学习 模型训练来说暂时用不到，因此使用convert('RGB')进行通道转换。
     """
-    img_mask = Image.open(req.mask_pic_ath).convert("RGB")
-    img_tmpl = Image.open(req.template_pic_path).convert("RGB")
-    img_target = Image.open(req.target_pic_path).convert("RGB")
+    # img_mask = Image.open(req.mask_pic_ath).convert("RGB")
+    # img_tmpl = Image.open(req.template_pic_path).convert("RGB")
+    # img_target = Image.open(req.target_pic_path).convert("RGB")
 
-    template = np.array(img_tmpl)
-    target = np.array(img_target)
-    mask = np.array(img_mask)
+    # template = np.array(img_tmpl)
+    # target = np.array(img_target)
+    # mask = np.array(img_mask)
 
-    return detect_avatar(target = target, template = template, mask = mask)
+    return detect_avatar(target = req.target_pic_path, template = req.template_pic_path, mask = req.mask_pic_ath)
 
 
 @app.get("/res/list/{dir:path}")
