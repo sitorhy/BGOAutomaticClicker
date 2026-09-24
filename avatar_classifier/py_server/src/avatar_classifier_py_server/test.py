@@ -260,11 +260,17 @@ class TestUnit(unittest.TestCase):
                 'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'Breakser.png',
             },
             {
+                'fit': 'fill', # contain / cover / fill
                 'name': 'label',
                 'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_金标.png',
             },
         ]
-        merge_layers(layers)
+        canvas = merge_layers(layers)
+        canvas.save(Path(__file__).parent.parent.parent / 'temp' / 'output.png')
+        
+    def test_pic_merge_contain(self):
+        """测试合并链配置生成"""
+        
 
 
 def parse_layer_image(template: PathLike | str | np.ndarray | None):
@@ -309,15 +315,55 @@ def merge_layers(layers: list[{'name': NotRequired[str] | None, 'template': np.n
                 mask = mask.resize(template_img.size)
             template_img.putalpha(mask)
 
-        # 如果所有图层尺寸一致，可直接合成；否则需要中间层兜底尺寸差异
+        # 如果所有图层尺寸一致，可直接合成；否则根据 fit 的取值做大小适应后再合成
         if template_img.size == canvas.size:
             canvas = Image.alpha_composite(canvas, template_img)
         else:
+            template_img = fit_layer_to_canvas(template_img, canvas.size, layer.get('fit'))
             temp_layer = Image.new('RGBA', canvas.size, (0, 0, 0, 0))
-            temp_layer.paste(template_img, (0, 0))
+            temp_layer.paste(template_img, (0, 0), template_img)
             canvas = Image.alpha_composite(canvas, temp_layer)
 
-    canvas.save(Path(__file__).parent.parent.parent / 'temp' / 'output.png')
+    return canvas
+
+
+def fit_layer_to_canvas(img: Image.Image, canvas_size: tuple[int, int], fit: str | None):
+    """根据 fit 模式将图层缩放到画布大小并居中放置
+
+    fit 取值:
+        None  : 不缩放，保持原尺寸，居中放置在画布上（原有兜底行为）
+        fill  : 直接拉伸到与画布一样大小（不保持宽高比）
+        contain  : 等比缩放使图层完整容纳在画布内（可能留边）
+        cover    : 等比缩放使图层完全覆盖画布（可能超出裁剪）
+    """
+    cw, ch = canvas_size
+    iw, ih = img.size
+
+    if fit is None:
+        # 保持原尺寸，居中平移到画布上
+        fitted = Image.new('RGBA', canvas_size, (0, 0, 0, 0))
+        fitted.paste(img, ((cw - iw) // 2, (ch - ih) // 2), img)
+        return fitted
+
+    if fit == 'fill':
+        return img.resize((cw, ch))
+
+    if fit == 'contain':
+        scale = min(cw / iw, ch / ih)
+        resized = img.resize((max(1, round(iw * scale)), max(1, round(ih * scale))))
+        fitted = Image.new('RGBA', canvas_size, (0, 0, 0, 0))
+        fitted.paste(resized, ((cw - resized.width) // 2, (ch - resized.height) // 2), resized)
+        return fitted
+
+    if fit == 'cover':
+        scale = max(cw / iw, ch / ih)
+        resized = img.resize((max(1, round(iw * scale)), max(1, round(ih * scale))))
+        # 居中裁剪到画布大小
+        left = (resized.width - cw) // 2
+        top = (resized.height - ch) // 2
+        return resized.crop((left, top, left + cw, top + ch))
+
+    raise ValueError(f'未知的 fit 模式: {fit}')
 
 
 if __name__ == '__main__':
