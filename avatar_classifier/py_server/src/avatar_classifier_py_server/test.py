@@ -5,13 +5,32 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 from scipy.signal import fftconvolve
-from typing_extensions import NotRequired  # <--- 从这里导入！
+from typing import Any, Literal
+from typing_extensions import NotRequired, TypedDict  # <--- 从这里导入！
 import cv2
 
 """
 测试用例
 .venv/Scripts/python.exe -m unittest avatar_classifier_py_server.test.TestUnit.test_avatar_detect
 """
+
+# res 资源根目录，配置中的图片路径均基于它解析
+RES_DIR = Path(__file__).parent.parent.parent / 'res'
+
+FitMode = Literal['fill', 'contain', 'cover']
+
+
+class LayerSpec(TypedDict, total=False):
+    """单个图层/标记图片的描述（对应注释中的 b1、l1、c1、s1、f1 等序列元素）"""
+    # 唯一标识，动态修改配置时可能会用到
+    name: str
+    # 模板图片路径（str | PathLike）或已加载好的 ndarray
+    template: PathLike | str | np.ndarray
+    # 裁剪掩码图片路径，灰度图，合成前通过 putalpha 转为透明通道
+    mask: NotRequired[PathLike | str]
+    # 尺寸不适应于画布时的缩放策略: contain / cover / fill, None 表示居中放置
+    fit: NotRequired[FitMode | None]
+
 
 
 class TestUnit(unittest.TestCase):
@@ -232,39 +251,14 @@ class TestUnit(unittest.TestCase):
         # cv2.waitKey(0)
         # cv2.destroyAllWindows()
 
-        # 图层配置拟定
-        layers = [
-            {
-                'name': 'background',  # 唯一标识， 动态修改配置时可能会用到
-                'template': np.asarray(blank_img)
-            },
-            {
-                'name': 'frame',
-                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L0_金框.png',
-            },
-            {
-                'name': 'avatar',
-                'mask': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'BGO头像裁剪掩码.png',
-                'template': target_img_clip,
-            },
-            {
-                'name': 'stars',
-                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星.png',
-            },
-            {
-                'name': 'status',
-                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_满破标.png',
-            },
-            {
-                'name': 'class',
-                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'Breakser.png',
-            },
-            {
-                'fit': 'fill', # contain / cover / fill
-                'name': 'label',
-                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_金标.png',
-            },
-        ]
+        # 图层配置从 AVATAR_COMPOSITE_CONFIG 中提取（示例：金卡分组）
+        layers = build_layers_from_config(AVATAR_COMPOSITE_CONFIG, '金')
+        # 配置中 'blank' / 'clip' 为运行时占位符，此处替换为实际图片数据
+        for layer in layers:
+            if layer.get('template') == 'blank':
+                layer['template'] = np.asarray(blank_img)
+            elif layer.get('template') == 'clip':
+                layer['template'] = target_img_clip
         canvas = merge_layers(layers)
         canvas.save(Path(__file__).parent.parent.parent / 'temp' / 'output.png')
         
@@ -364,6 +358,78 @@ def fit_layer_to_canvas(img: Image.Image, canvas_size: tuple[int, int], fit: str
         return resized.crop((left, top, left + cw, top + ch))
 
     raise ValueError(f'未知的 fit 模式: {fit}')
+
+def test_merge_layers():
+    """
+    头像合成链（统一输入输出结构，8 个阶段，每个阶段对应一个序列）：
+
+    ── 数据流 ────────────────────────────────────────────────────────────────
+    每个阶段接收一个 “序列集”，输出一个 “序列集”，上一阶段的输出即下一阶段的输入，
+    阶段间无需做数据适配（stage_in(N+1) == stage_out(N)）。
+
+    阶段流转（STAGE_ORDER，分组键即序列集的检索入口）：
+      1 background 输入[default] 项×1        → 输出[default]  叠加背景基底（最底层）  ×1
+      2 avatar     输入[default] 项×1(立绘)   → 输出[default]  探测生成 t1...tn        ×n
+      3 expand     输入[default] 项×n        → 输出[金,银,铜,铁,冠位]  按(分组,组合)展开
+      4 frame      输入 各头像分组 项×z       → 输出分组不变  叠加边框 m 种   ×(z×m)
+      5 label      输入 各头像分组 项×z       → 输出分组不变  叠加标签 q 种   ×(z×q)
+      6 status     输入 各头像分组 项×z       → 输出分组不变  叠加满破 k 种   ×(z×k)
+      7 stars      输入 各头像分组 项×z       → 输出分组不变  叠加星标 p 种   ×(z×p)
+      8 class      输入 各头像分组 项×z       → 输出分组不变  叠加职介 r 种   ×(z×r)
+      （z 为当前分组内累计项数；每个阶段只读上一阶段的输出集，写完自己的输出集后旧项删除）
+
+    ── 各阶段详述 ────────────────────────────────────────────────────────────
+    阶段一：背景基底（background，分组内叠加，分组透传）
+    输入 = 输出分组 "default"；叠加黑色底画布（template 为 'blank' 占位，运行时由调用方填充），
+    作为序列项 layers 的最底层。项数 ×1。
+
+    阶段二：头像序列初始化（avatar，生成，分组透传）
+    输入：分组 "default"，立绘图片（每项 template = 一张立绘）
+    2.1 探测头像位置，获取头像序列的生成范围，根据步进插值获取头像区域序列：
+        记步进为 step（配置 avatar_cfg.step，step = 10 表示从头像的最大和最小范围间取 10 个矩形）
+        记头像区域序列为 r1, r2, r3 .... rn, 1 <= n <= step
+        r1 ... rn 从输入立绘中截取的头像切片为 a1, .... an
+        a1 ... an 保存为临时图片 c1, .... cn（实际实现可添加前缀加以区分）
+        c1, .... cn 分别和 avatar_cfg.mask（"BGO头像裁剪掩码.png"，灰度图）进行逻辑与运算
+        （putalpha，注意掩码是灰度图），回传为 c1, .... cn，得到边缘透明的头像图片序列
+    输出：分组 "default" 不变，序列集 { items: [c1 ... cn] }，每个 c.layers = [背景层, 头像层(clip)]
+
+    阶段三：分组展开（expand，不加图层，只改变分组）
+    输入：分组 "default" 的序列集（t1 ... tn）
+    3.1 把 "default" 展开为头像分组（"金"、"银"、"铜"、"铁"、"冠位" × 进阶组合 pair），
+        每个输入项按 expand_targets(cfg) 的 (分组, 组合) 对逐个复制，group / pair 赋值到序列项，
+        layers 不变（不叠加任何图层）。铜卡可一路突破为金卡/冠位，体现为多个 pair。
+    输出：分组为各头像分组，序列项携带 group 与 pair，供后续阶段按归属取图
+
+    阶段四：叠加边框（frame，分组内扩展，分组透传）
+    输入 = 阶段三输出。记当前分组边框序列 b1 ... bm（5 种框：L0_金框 / L0_银框 /
+    L0_铜框 / L0_铁框 / L0_冠位框），每项与 b1 ... bm 叠加合成，项数 ×m。
+    输出分组 = 输入分组，c.layers += [边框层]
+
+    阶段五：叠加标签（label，分组内扩展，分组透传）
+    输入 = 阶段四输出。记当前分组标签序列 l1 ... lq（fit=fill），每项与 l1 ... lq 叠加合成，项数 ×q。
+    输出分组 = 输入分组，c.layers += [标签层]
+
+    阶段六：添加满破标记（status，分组内扩展，分组透传）
+    输入 = 阶段五输出。记满破标记序列 c1' ... ck', 0 <= k <= 4，默认所有从者满破
+    （只有 "L1_满破标.png"），实际 k = 1；每项分别叠加 c1' ... ck'，项数 ×k。
+    输出分组 = 输入分组，c.layers += [满破层]
+
+    阶段七：添加稀有度标记（stars，分组内扩展，分组透传）
+    每个分组对应一个标记序列 s1 ... sp（p 为整数），按 pair 取图。
+    例如铜卡有 "L1_1星.png"、"L1_2星.png"；而金卡最多，有 "L1_4星.png"、"L1_5星.png"，
+    "L1_2星再临.png" 也可以是金卡的星标。每项与 s1 ... sp 叠加合成，项数 ×p。
+    输出分组 = 输入分组，c.layers += [星标层]
+
+    阶段八：添加职介标记（class，分组内扩展，分组透传）
+    跟阶段七一样，每个分组对应一个职介标记序列 f1 ... fr（r 为整数），按 pair 取图，
+    铜卡序列为 "铜卡Saber.png" 等。每项与 f1 ... fr 叠加合成，项数 ×r。
+    输出分组 = 输入分组，c.layers += [职介层]，即为最终头像合成结果序列
+
+    统一输入输出收益：阶段接口一致（序列集 -> 序列集），任意两个阶段可直接串联；
+    拆分后 expand / frame / label 职责单一，新增阶段（如灵衣层）只需在 STAGE_ORDER 插入
+    阶段名、实现 stage_branches 的分支与分组归属配置即可自动接入流水线。
+    """
 
 
 if __name__ == '__main__':
