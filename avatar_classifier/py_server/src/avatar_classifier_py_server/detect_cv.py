@@ -12,6 +12,11 @@ from pathlib import Path
 import numpy as np
 import cv2
 
+# res 根目录：py_server/res（detect_cv.py 位于 py_server/src/avatar_classifier_py_server/ 下）
+_RES_ROOT = Path(__file__).resolve().parents[2] / "res"
+# YuNet 人脸检测模型默认路径（OpenCV Zoo: face_detection_yunet_2023mar.onnx）
+DEFAULT_FACE_MODEL = _RES_ROOT / "model" / "face_detection_yunet_2023mar.onnx"
+
 
 def _imread_unicode(path: str | Path, flags: int) -> np.ndarray:
     """读取图片，兼容 Windows 中文路径。
@@ -132,5 +137,88 @@ def detect_avatar(
     print(f"  匹配度:   {best['score']:.4f}")
     print(f"  位置:     ({best['x']}, {best['y']})")
     print(f"  区域:     ({x1}, {y1}) → ({x2}, {y2})")
+
+    return results
+
+
+def detect_face(
+        image: str | Path,
+        model_path: str | Path | None = None,
+        score_threshold: float = 0.6,
+        nms_threshold: float = 0.3,
+        top_k: int = 5000,
+) -> list[dict]:
+    """使用 OpenCV 的 FaceDetectorYN（YuNet 人脸检测模型）检测图像中的人脸。
+
+    FaceDetectorYN.create(model, config, input_size, score_threshold, nms_threshold, top_k)
+    中 config 传空字符串（YuNet 为单文件 ONNX，无需额外配置文件），input_size 为 (宽, 高)。
+    detect() 返回的 faces 为 N×15 数组，每行依次为：
+        [0]x [1]y [2]w [3]h
+        [4][5] 左眼   [6][7] 右眼   [8][9] 鼻尖   [10][11] 嘴角左   [12][13] 嘴角右
+        [14] 置信度
+
+    Args:
+        image: 待检测图像路径（立绘/头像等，自动兼容中文路径）
+        model_path: YuNet ONNX 模型路径，None 时使用 DEFAULT_FACE_MODEL
+        score_threshold: 人脸置信度阈值，低于该值的检测被过滤，默认 0.6
+        nms_threshold: 非极大值抑制阈值，默认 0.3
+        top_k: 保留的候选框上限，默认 5000
+
+    Returns:
+        检测到的人脸列表，按置信度降序排列。每项包含:
+            score     - 置信度 [0, 1]
+            x, y      - 人脸框左上角坐标
+            w, h      - 人脸框宽高
+            rect      - (x, y, x+w, y+h) 便捷元组
+            landmarks - 5 个关键点：left_eye / right_eye / nose_tip / mouth_left / mouth_right
+    """
+    model = Path(model_path) if model_path is not None else DEFAULT_FACE_MODEL
+    if not model.exists():
+        raise FileNotFoundError(
+            f"未找到 YuNet 人脸检测模型: {model}\n"
+            f"请从 OpenCV Zoo 下载 face_detection_yunet_2023mar.onnx 并放入该路径，"
+            f"或通过 model_path 参数指定。"
+        )
+
+    # FaceDetectorYN 按 BGR 读入
+    img = _imread_unicode(image, cv2.IMREAD_COLOR)
+    h, w = img.shape[:2]
+
+    # 创建检测器并设定输入尺寸（与待检测图像一致）
+    detector = cv2.FaceDetectorYN.create(
+        str(model), "", (w, h), score_threshold, nms_threshold, top_k,
+    )
+    detector.setInputSize((w, h))
+
+    # detect 返回 (retval, faces)，faces 为 N×15；未检到人脸时为空
+    _retval, faces = detector.detect(img)
+
+    results: list[dict] = []
+    if faces is None:
+        return results
+    for face in faces:
+        x, y, fw, fh = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+        landmarks = {
+            "left_eye": (int(face[4]), int(face[5])),
+            "right_eye": (int(face[6]), int(face[7])),
+            "nose_tip": (int(face[8]), int(face[9])),
+            "mouth_left": (int(face[10]), int(face[11])),
+            "mouth_right": (int(face[12]), int(face[13])),
+        }
+        results.append({
+            "score": float(face[14]),
+            "x": x,
+            "y": y,
+            "w": fw,
+            "h": fh,
+            "rect": (x, y, x + fw, y + fh),
+            "landmarks": landmarks,
+        })
+
+    # 按置信度降序
+    results.sort(key=lambda r: r["score"], reverse=True)
+    print(f"\n🙂 共检测到 {len(results)} 张人脸")
+    for i, r in enumerate(results):
+        print(f"  #{i} 置信度={r['score']:.3f} 区域={r['rect']}")
 
     return results

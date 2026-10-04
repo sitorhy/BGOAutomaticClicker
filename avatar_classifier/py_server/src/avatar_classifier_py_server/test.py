@@ -487,26 +487,39 @@ def test_merge_layers():
     #     ]
     # ).output()
 
-    # 收集 temp 目录下 "avatar_clip_{num}.png" 形式的图片，按 num 升序作为 template 图层序列
-    temp_dir = Path(__file__).parent.parent.parent / 'temp'
-    clip_paths = sorted(
-        temp_dir.glob('avatar_clip_*.png'),
-        key=lambda p: int(p.stem.split('_')[-1]),
-    )
+    # 上一阶段：分组展开与边框合成，结果已落盘于 temp/{分组}/，此处暂时注释
+    # temp_dir = Path(__file__).parent.parent.parent / 'temp'
+    # clip_paths = sorted(
+    #     temp_dir.glob('avatar_clip_*.png'),
+    #     key=lambda p: int(p.stem.split('_')[-1]),
+    # )
+    #
+    # ExpandClipChainNode(
+    #     input=[
+    #         MergeChainNodeGroup(
+    #             name='default',
+    #             layers=[
+    #                 {
+    #                     'template': clip_path,
+    #                 }
+    #                 for clip_path in clip_paths
+    #             ]
+    #         )
+    #     ]
+    # ).output()
 
-    ExpandClipChainNode(
-        input=[
-            MergeChainNodeGroup(
-                name='default',
-                layers=[
-                    {
-                        'template': clip_path,
-                    }
-                    for clip_path in clip_paths
-                ]
-            )
-        ]
-    ).output()
+    # 从磁盘收集上一阶段落盘的分组图片（temp/{分组}/*.png），作为标签叠加阶段的输入
+    label_root = Path(__file__).parent.parent.parent / 'temp'
+    label_groups = [
+        MergeChainNodeGroup(
+            name=d.name,
+            layers=[{'template': f} for f in sorted(d.glob('*.png'))],
+        )
+        for d in label_root.iterdir()
+        if d.is_dir()
+    ]
+
+    LabelChainNode(input=label_groups).output()
 
 
 class MergeChainNodeGroup:
@@ -738,6 +751,387 @@ class ExpandClipChainNode(MergeChainNode):
 
             # 以 name 作为分组名称，分组目录下的图片作为图层 template
             groups.append(MergeChainNodeGroup(name=frame['name'], layers=layers))
+
+        return groups
+
+class LabelChainNode(MergeChainNode):
+    # 新分组图片生成后是否移除上一流程生成的旧图片，默认 True（删除处理）
+    delete_old: bool = True
+
+    def output(self) -> list[MergeChainNodeGroup]:
+        label_paths = [
+            {
+                'name': '金',
+                'labels': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_金标.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_满级金标.png',
+                ],
+            },
+            {
+                'name': '银',
+                'labels': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_银标.png'
+                ],
+            },
+            {
+                'name': '铜',
+                'labels': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_铜标.png'
+                ],
+            },
+            {
+                'name': '铁',
+                'labels': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_铁标.png'
+                ],
+            },
+            {
+                'name': '冠位',
+                'labels': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_冠位标.png'
+                ],
+            },
+            {
+                'name': '满级冠位',
+                'labels': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_满级冠位标.png'
+                ],
+            },
+        ]
+
+        root = Path(__file__).parent.parent.parent / 'temp'
+        # 分组名 -> labels 图层配置
+        labels_map = {str(cfg['name']): cfg['labels'] for cfg in label_paths}
+
+        groups: list[MergeChainNodeGroup] = []
+        for group in self.input:
+            labels = labels_map.get(str(group.name), [])
+            group_dir = root / group.name
+            group_dir.mkdir(parents=True, exist_ok=True)
+
+            new_layers: list[LayerSpec] = []
+            old_paths: list = []
+            # 交叉合成：每个输入图层 × 每个标签图层，labels=2 且 layers=10 时输出 20 个图层
+            for layer in group.layers:
+                avatar_path = layer.get('template')
+                if avatar_path is None:
+                    continue
+                old_paths.append(avatar_path)
+                for label_index, label_path in enumerate(labels):
+                    # 标签叠加在分组图之上，按标签序号命名以区分同一头像的不同标签产物
+                    canvas = merge_layers([
+                        {'template': avatar_path},
+                        {'template': label_path, 'fit': 'fill'},
+                    ])
+                    out_path = group_dir / f"{Path(str(avatar_path)).stem}_label{label_index}.png"
+                    canvas.save(out_path)
+                    new_layers.append({'template': out_path})
+
+            # 输出分组名称不变，仅图层发生变化
+            groups.append(MergeChainNodeGroup(name=group.name, layers=new_layers))
+
+            # 新图片生成后，按需移除上一流程生成的旧图片
+            if self.delete_old:
+                for old_path in old_paths:
+                    p = Path(str(old_path))
+                    if p.exists():
+                        p.unlink()
+
+        return groups
+
+
+class StatusChainNode(MergeChainNode):
+    # 新分组图片生成后是否移除上一流程生成的旧图片，默认 True（删除处理）
+    delete_old: bool = True
+
+    def output(self) -> list[MergeChainNodeGroup]:
+        status_paths = [
+            {
+                'name': '金',
+                'status': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_满破标.png',
+                ],
+            },
+            {
+                'name': '银',
+                'status': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_满破标.png',
+                ],
+            },
+            {
+                'name': '铜',
+                'status': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_满破标.png',
+                ],
+            },
+            {
+                'name': '铁',
+                'status': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_满破标.png',
+                ],
+            },
+            {
+                'name': '冠位',
+                'status': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_满破标.png',
+                ],
+            },
+            {
+                'name': '满级冠位',
+                'status': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_满破标.png',
+                ],
+            },
+        ]
+
+        root = Path(__file__).parent.parent.parent / 'temp'
+        # 分组名 -> 满破标记图层配置
+        status_map = {str(cfg['name']): cfg['status'] for cfg in status_paths}
+
+        groups: list[MergeChainNodeGroup] = []
+        for group in self.input:
+            markers = status_map.get(str(group.name), [])
+            # 本阶段该分组无标记配置时原样透传图层，不生成新图也不删除旧图
+            if not markers:
+                groups.append(MergeChainNodeGroup(name=group.name, layers=list(group.layers)))
+                continue
+
+            group_dir = root / group.name
+            group_dir.mkdir(parents=True, exist_ok=True)
+
+            new_layers: list[LayerSpec] = []
+            old_paths: list = []
+            # 交叉合成：每个输入图层 × 每个满破标记图层
+            for layer in group.layers:
+                avatar_path = layer.get('template')
+                if avatar_path is None:
+                    continue
+                old_paths.append(avatar_path)
+                for marker_index, marker_path in enumerate(markers):
+                    canvas = merge_layers([
+                        {'template': avatar_path},
+                        {'template': marker_path, 'fit': 'fill'},
+                    ])
+                    out_path = group_dir / f"{Path(str(avatar_path)).stem}_status{marker_index}.png"
+                    canvas.save(out_path)
+                    new_layers.append({'template': out_path})
+
+            # 输出分组名称不变，仅图层发生变化
+            groups.append(MergeChainNodeGroup(name=group.name, layers=new_layers))
+
+            # 新图片生成后，按需移除上一流程生成的旧图片
+            if self.delete_old:
+                for old_path in old_paths:
+                    p = Path(str(old_path))
+                    if p.exists():
+                        p.unlink()
+
+        return groups
+
+class StarsChainNode(MergeChainNode):
+    # 新分组图片生成后是否移除上一流程生成的旧图片，默认 True（删除处理）
+    delete_old: bool = True
+
+    def output(self) -> list[MergeChainNodeGroup]:
+        stars_paths = [
+            {
+                'name': '金',
+                'stars': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_1星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_1星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_2星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_2星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_3星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_3星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_5星.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_5星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_5星冠位.png',
+                ],
+            },
+            {
+                'name': '银',
+                'stars': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_1星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_2星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_3星.png',
+                ],
+            },
+            {
+                'name': '铜',
+                'stars': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_1星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_2星.png',
+                ],
+            },
+            {
+                'name': '铁',
+                'stars': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_2星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_2星.png',
+                ],
+            },
+            {
+                'name': '冠位',
+                'stars': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_1星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_1星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_2星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_2星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_3星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_3星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_5星.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_5星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_5星冠位.png',
+                ],
+            },
+            {
+                'name': '满级冠位',
+                'stars': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_1星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_1星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_2星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_2星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_3星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_3星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星冠位.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_5星.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_5星再临.png',
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_5星冠位.png',
+                ],
+            },
+        ]
+
+        root = Path(__file__).parent.parent.parent / 'temp'
+        # 分组名 -> 稀有度星标图层配置
+        stars_map = {str(cfg['name']): cfg['stars'] for cfg in stars_paths}
+
+        groups: list[MergeChainNodeGroup] = []
+        for group in self.input:
+            markers = stars_map.get(str(group.name), [])
+            # 本阶段该分组无标记配置时原样透传图层，不生成新图也不删除旧图
+            if not markers:
+                groups.append(MergeChainNodeGroup(name=group.name, layers=list(group.layers)))
+                continue
+
+            group_dir = root / group.name
+            group_dir.mkdir(parents=True, exist_ok=True)
+
+            new_layers: list[LayerSpec] = []
+            old_paths: list = []
+            # 交叉合成：每个输入图层 × 每个星标图层
+            for layer in group.layers:
+                avatar_path = layer.get('template')
+                if avatar_path is None:
+                    continue
+                old_paths.append(avatar_path)
+                for marker_index, marker_path in enumerate(markers):
+                    canvas = merge_layers([
+                        {'template': avatar_path},
+                        {'template': marker_path, 'fit': 'fill'},
+                    ])
+                    out_path = group_dir / f"{Path(str(avatar_path)).stem}_stars{marker_index}.png"
+                    canvas.save(out_path)
+                    new_layers.append({'template': out_path})
+
+            # 输出分组名称不变，仅图层发生变化
+            groups.append(MergeChainNodeGroup(name=group.name, layers=new_layers))
+
+            # 新图片生成后，按需移除上一流程生成的旧图片
+            if self.delete_old:
+                for old_path in old_paths:
+                    p = Path(str(old_path))
+                    if p.exists():
+                        p.unlink()
+
+        return groups
+
+class ClassChainNode(MergeChainNode):
+    # 新分组图片生成后是否移除上一流程生成的旧图片，默认 True（删除处理）
+    delete_old: bool = True
+
+    def output(self) -> list[MergeChainNodeGroup]:
+        class_paths = [
+            {
+                'name': '金',
+                'class': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'Breakser.png',
+                ],
+            },
+            {
+                'name': '银',
+                'class': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / '银卡Berserker.png',
+                ],
+            },
+            {
+                'name': '铜',
+                'class': [
+                    Path(__file__).parent.parent.parent / 'res' / 'foreground' / '铜卡Berserker.png',
+                ],
+            },
+            {
+                'name': '铁',
+                'class': [],
+            },
+            {
+                'name': '冠位',
+                'class': [],
+            },
+            {
+                'name': '满级冠位',
+                'class': [],
+            },
+        ]
+
+        root = Path(__file__).parent.parent.parent / 'temp'
+        # 分组名 -> 职介标记图层配置
+        class_map = {str(cfg['name']): cfg['class'] for cfg in class_paths}
+
+        groups: list[MergeChainNodeGroup] = []
+        for group in self.input:
+            markers = class_map.get(str(group.name), [])
+            # 本阶段该分组无标记配置时原样透传图层，不生成新图也不删除旧图
+            if not markers:
+                groups.append(MergeChainNodeGroup(name=group.name, layers=list(group.layers)))
+                continue
+
+            group_dir = root / group.name
+            group_dir.mkdir(parents=True, exist_ok=True)
+
+            new_layers: list[LayerSpec] = []
+            old_paths: list = []
+            # 交叉合成：每个输入图层 × 每个职介标记图层
+            for layer in group.layers:
+                avatar_path = layer.get('template')
+                if avatar_path is None:
+                    continue
+                old_paths.append(avatar_path)
+                for marker_index, marker_path in enumerate(markers):
+                    canvas = merge_layers([
+                        {'template': avatar_path},
+                        {'template': marker_path, 'fit': 'fill'},
+                    ])
+                    out_path = group_dir / f"{Path(str(avatar_path)).stem}_class{marker_index}.png"
+                    canvas.save(out_path)
+                    new_layers.append({'template': out_path})
+
+            # 输出分组名称不变，仅图层发生变化
+            groups.append(MergeChainNodeGroup(name=group.name, layers=new_layers))
+
+            # 新图片生成后，按需移除上一流程生成的旧图片
+            if self.delete_old:
+                for old_path in old_paths:
+                    p = Path(str(old_path))
+                    if p.exists():
+                        p.unlink()
 
         return groups
 
