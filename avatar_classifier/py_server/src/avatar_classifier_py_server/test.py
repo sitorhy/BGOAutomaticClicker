@@ -391,7 +391,7 @@ def fit_layer_to_canvas(img: Image.Image, canvas_size: tuple[int, int], fit: str
 
 def test_merge_layers():
     """
-    头像合成链（统一输入输出结构，8 个阶段，每个阶段对应一个序列）：
+    头像合成链（统一输入输出结构，7 个阶段，每个阶段对应一个序列）：
 
     ── 数据流 ────────────────────────────────────────────────────────────────
     每个阶段接收一个 “序列集”，输出一个 “序列集”，上一阶段的输出即下一阶段的输入，
@@ -400,12 +400,11 @@ def test_merge_layers():
     阶段流转（STAGE_ORDER，分组键即序列集的检索入口）：
       1 background 输入[default] 项×1        → 输出[default]  叠加背景基底（最底层）  ×1
       2 avatar     输入[default] 项×1(立绘)   → 输出[default]  探测生成 t1...tn        ×n
-      3 expand     输入[default] 项×n        → 输出[金,银,铜,铁,冠位]  按(分组,组合)展开
-      4 frame      输入 各头像分组 项×z       → 输出分组不变  叠加边框 m 种   ×(z×m)
-      5 label      输入 各头像分组 项×z       → 输出分组不变  叠加标签 q 种   ×(z×q)
-      6 status     输入 各头像分组 项×z       → 输出分组不变  叠加满破 k 种   ×(z×k)
-      7 stars      输入 各头像分组 项×z       → 输出分组不变  叠加星标 p 种   ×(z×p)
-      8 class      输入 各头像分组 项×z       → 输出分组不变  叠加职介 r 种   ×(z×r)
+      3 expand     输入[default] 项×n        → 输出[金,银,铜,铁,冠位]  按边框分组展开并叠加边框 m 种
+      4 label      输入 各头像分组 项×z       → 输出分组不变  叠加标签 q 种   ×(z×q)
+      5 status     输入 各头像分组 项×z       → 输出分组不变  叠加满破 k 种   ×(z×k)
+      6 stars      输入 各头像分组 项×z       → 输出分组不变  叠加星标 p 种   ×(z×p)
+      7 class      输入 各头像分组 项×z       → 输出分组不变  叠加职介 r 种   ×(z×r)
       （z 为当前分组内累计项数；每个阶段只读上一阶段的输出集，写完自己的输出集后旧项删除）
 
     ── 各阶段详述 ────────────────────────────────────────────────────────────
@@ -424,40 +423,37 @@ def test_merge_layers():
         （putalpha，注意掩码是灰度图），回传为 c1, .... cn，得到边缘透明的头像图片序列
     输出：分组 "default" 不变，序列集 { items: [c1 ... cn] }，每个 c.layers = [背景层, 头像层(clip)]
 
-    阶段三：分组展开（expand，不加图层，只改变分组）
+    阶段三：分组展开 + 叠加边框（expand，按边框分组展开并合成，分组透传）
     输入：分组 "default" 的序列集（t1 ... tn）
-    3.1 把 "default" 展开为头像分组（"金"、"银"、"铜"、"铁"、"冠位" × 进阶组合 pair），
-        每个输入项按 expand_targets(cfg) 的 (分组, 组合) 对逐个复制，group / pair 赋值到序列项，
-        layers 不变（不叠加任何图层）。铜卡可一路突破为金卡/冠位，体现为多个 pair。
-    输出：分组为各头像分组，序列项携带 group 与 pair，供后续阶段按归属取图
+    3.1 头像分组数量不会超过边框种类，实际就是按边框分组：把 "default" 的每项按头像分组
+        （"金"、"银"、"铜"、"铁"、"冠位" ... × 进阶组合 pair）逐个复制展开，
+        group / pair 赋值到序列项；记分组边框序列 b1 ... bm（L0_金框 / L0_银框 /
+        L0_铜框 / L0_铁框 / L0_冠位框 ...），按归属把边框叠加合成到序列项，
+        c.layers += [边框层]。铜卡可一路突破为金卡/冠位，体现为多个 pair。
+    输出：分组为各头像分组，序列项携带 group 与 pair，c.layers += [边框层]，供后续阶段按归属取图
 
-    阶段四：叠加边框（frame，分组内扩展，分组透传）
-    输入 = 阶段三输出。记当前分组边框序列 b1 ... bm（5 种框：L0_金框 / L0_银框 /
-    L0_铜框 / L0_铁框 / L0_冠位框），每项与 b1 ... bm 叠加合成，项数 ×m。
-    输出分组 = 输入分组，c.layers += [边框层]
-
-    阶段五：叠加标签（label，分组内扩展，分组透传）
-    输入 = 阶段四输出。记当前分组标签序列 l1 ... lq（fit=fill），每项与 l1 ... lq 叠加合成，项数 ×q。
+    阶段四：叠加标签（label，分组内扩展，分组透传）
+    输入 = 阶段三输出。记当前分组标签序列 l1 ... lq（fit=fill），每项与 l1 ... lq 叠加合成，项数 ×q。
     输出分组 = 输入分组，c.layers += [标签层]
 
-    阶段六：添加满破标记（status，分组内扩展，分组透传）
-    输入 = 阶段五输出。记满破标记序列 c1' ... ck', 0 <= k <= 4，默认所有从者满破
+    阶段五：添加满破标记（status，分组内扩展，分组透传）
+    输入 = 阶段四输出。记满破标记序列 c1' ... ck', 0 <= k <= 4，默认所有从者满破
     （只有 "L1_满破标.png"），实际 k = 1；每项分别叠加 c1' ... ck'，项数 ×k。
     输出分组 = 输入分组，c.layers += [满破层]
 
-    阶段七：添加稀有度标记（stars，分组内扩展，分组透传）
+    阶段六：添加稀有度标记（stars，分组内扩展，分组透传）
     每个分组对应一个标记序列 s1 ... sp（p 为整数），按 pair 取图。
     例如铜卡有 "L1_1星.png"、"L1_2星.png"；而金卡最多，有 "L1_4星.png"、"L1_5星.png"，
     "L1_2星再临.png" 也可以是金卡的星标。每项与 s1 ... sp 叠加合成，项数 ×p。
     输出分组 = 输入分组，c.layers += [星标层]
 
-    阶段八：添加职介标记（class，分组内扩展，分组透传）
-    跟阶段七一样，每个分组对应一个职介标记序列 f1 ... fr（r 为整数），按 pair 取图，
+    阶段七：添加职介标记（class，分组内扩展，分组透传）
+    跟阶段六一样，每个分组对应一个职介标记序列 f1 ... fr（r 为整数），按 pair 取图，
     铜卡序列为 "铜卡Saber.png" 等。每项与 f1 ... fr 叠加合成，项数 ×r。
     输出分组 = 输入分组，c.layers += [职介层]，即为最终头像合成结果序列
 
     统一输入输出收益：阶段接口一致（序列集 -> 序列集），任意两个阶段可直接串联；
-    拆分后 expand / frame / label 职责单一，新增阶段（如灵衣层）只需在 STAGE_ORDER 插入
+    拆分后 expand / label 职责单一，新增阶段（如灵衣层）只需在 STAGE_ORDER 插入
     阶段名、实现 stage_branches 的分支与分组归属配置即可自动接入流水线。
     """
 
@@ -724,6 +720,7 @@ class ExpandClipChainNode(MergeChainNode):
             frame_dir = root / f"{frame['name']}"
             frame_dir.mkdir(parents=True, exist_ok=True)
 
+            layers: list[LayerSpec] = []
             for avatar_foreground in first_input_group.layers:
                 avatar_foreground_path = avatar_foreground.get('template')
                 canvas = merge_layers([
@@ -734,13 +731,12 @@ class ExpandClipChainNode(MergeChainNode):
                         'template': avatar_foreground_path,
                     }
                 ])
-                canvas.save(frame_dir / os.path.basename(avatar_foreground_path))
+                out_path = frame_dir / os.path.basename(avatar_foreground_path)
+                canvas.save(out_path)
+                # 以刚保存的图片路径作为图层 template
+                layers.append({'template': out_path})
 
             # 以 name 作为分组名称，分组目录下的图片作为图层 template
-            layers = [
-                {'template': img_path}
-                for img_path in sorted(frame_dir.glob('*.png'))
-            ]
             groups.append(MergeChainNodeGroup(name=frame['name'], layers=layers))
 
         return groups
