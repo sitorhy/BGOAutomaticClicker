@@ -1,3 +1,5 @@
+import json
+import os.path
 from os import PathLike
 import unittest
 from pathlib import Path
@@ -8,6 +10,8 @@ from scipy.signal import fftconvolve
 from typing import Any, Literal
 from typing_extensions import NotRequired, TypedDict  # <--- 从这里导入！
 import cv2
+
+from .detect_cv import detect_avatar
 
 """
 测试用例
@@ -32,15 +36,14 @@ class LayerSpec(TypedDict, total=False):
     fit: NotRequired[FitMode | None]
 
 
-
 class TestUnit(unittest.TestCase):
     def test_avatar_cv_detect(self):
         mask_path = Path(__file__).parent.parent.parent / \
-            'res' / 'test' / 'mooncell头像探测掩码.jpg'
+                    'res' / 'test' / 'mooncell头像探测掩码.jpg'
         template_path = Path(__file__).parent.parent.parent / \
-            'res' / 'test' / 'Servant481.jpg'
+                        'res' / 'test' / 'Servant481.jpg'
         target_path = Path(__file__).parent.parent.parent / \
-            'res' / 'test' / '哈贝特洛特(Pretender)一破.png'
+                      'res' / 'test' / '哈贝特洛特(Pretender)一破.png'
 
         # cv2.imread 在 Windows 上不支持中文路径，会静默返回 None
         # 解决方案：cv2.imdecode(np.fromfile(...)) 先读字节再解码
@@ -89,7 +92,7 @@ class TestUnit(unittest.TestCase):
 
     def test_avatar_detect(self):
         mask_path = Path(__file__).parent.parent.parent / \
-            'res' / 'test' / 'mooncell头像探测掩码.jpg'
+                    'res' / 'test' / 'mooncell头像探测掩码.jpg'
         mask_img = Image.open(mask_path)
         print(f"掩码图片尺寸: {mask_img.size}")
         print(f"掩码图片模式: {mask_img.mode}")
@@ -127,7 +130,7 @@ class TestUnit(unittest.TestCase):
 
         # 加载头像图片，和掩码图进行逻辑 &，白色（1）的不会保留，黑色（0）的部分过滤
         template_path = Path(__file__).parent.parent.parent / \
-            'res' / 'test' / 'Servant481.jpg'
+                        'res' / 'test' / 'Servant481.jpg'
         template_img = Image.open(template_path)
         # template_img.show()
         print(f"模板图片色彩模式: {template_img.mode}")
@@ -165,7 +168,7 @@ class TestUnit(unittest.TestCase):
 
         # 1. 加载目标图像（立绘）并灰度化
         target_path = Path(__file__).parent.parent.parent / \
-            'res' / 'test' / '哈贝特洛特(Pretender)一破.png'
+                      'res' / 'test' / '哈贝特洛特(Pretender)一破.png'
         target_img = Image.open(target_path)
         target_gray = np.asarray(target_img.convert("L"), dtype=np.float64)
         print(f"目标图片尺寸: {target_img.size}")
@@ -226,7 +229,7 @@ class TestUnit(unittest.TestCase):
     def test_pic_merge(self):
         # 裁剪位置 (192, 140) -> (324, 284)
         target_path = Path(__file__).parent.parent.parent / \
-            'res' / 'test' / '哈贝特洛特(Pretender)一破.png'
+                      'res' / 'test' / '哈贝特洛特(Pretender)一破.png'
         target_img = cv2.imdecode(np.fromfile(target_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         # cv2.imshow('img_target', target_img)
         # cv2.waitKey(0)
@@ -239,7 +242,6 @@ class TestUnit(unittest.TestCase):
             target_img_clip = cv2.cvtColor(target_img_clip, cv2.COLOR_BGRA2RGBA)
         else:
             target_img_clip = cv2.cvtColor(target_img_clip, cv2.COLOR_BGR2RGB)
-        
 
         # 创建背景图，用黑色底填充，大小与裁剪区域相同
         blank_img = Image.new(
@@ -251,23 +253,50 @@ class TestUnit(unittest.TestCase):
         # cv2.waitKey(0)
         # cv2.destroyAllWindows()
 
-        # 图层配置从 AVATAR_COMPOSITE_CONFIG 中提取（示例：金卡分组）
-        layers = build_layers_from_config(AVATAR_COMPOSITE_CONFIG, '金')
-        # 配置中 'blank' / 'clip' 为运行时占位符，此处替换为实际图片数据
-        for layer in layers:
-            if layer.get('template') == 'blank':
-                layer['template'] = np.asarray(blank_img)
-            elif layer.get('template') == 'clip':
-                layer['template'] = target_img_clip
+        # 图层配置拟定
+        layers = [
+            {
+                'name': 'background',  # 唯一标识， 动态修改配置时可能会用到
+                'template': np.asarray(blank_img)
+            },
+            {
+                'name': 'frame',
+                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L0_金框.png',
+            },
+            {
+                'name': 'avatar',
+                'mask': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'BGO头像裁剪掩码.png',
+                'template': target_img_clip,
+            },
+            {
+                'name': 'stars',
+                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_4星.png',
+            },
+            {
+                'name': 'status',
+                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_满破标.png',
+            },
+            {
+                'name': 'class',
+                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'Breakser.png',
+            },
+            {
+                'fit': 'fill',  # contain / cover / fill
+                'name': 'label',
+                'template': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L1_金标.png',
+            },
+        ]
         canvas = merge_layers(layers)
-        canvas.save(Path(__file__).parent.parent.parent / 'temp' / 'output.png')
-        
-    def test_pic_merge_contain(self):
-        """测试合并链配置生成"""
-        
+        output_img = Path(__file__).parent.parent.parent / 'temp' / 'output.png'
+        if not output_img.parent.exists():
+            output_img.parent.mkdir(parents=True)
+        canvas.save(output_img)
+
+    def test_merge_layers(self):
+        test_merge_layers()
 
 
-def parse_layer_image(template: PathLike | str | np.ndarray | None):
+def parse_layer_image(template: PathLike | str | np.ndarray | None) -> np.ndarray | None:
     if isinstance(template, np.ndarray):
         # 调用方传入的 ndarray 应已是 RGB(A) 格式，不做通道转换
         return template
@@ -284,7 +313,7 @@ def parse_layer_image(template: PathLike | str | np.ndarray | None):
     return None
 
 
-def merge_layers(layers: list[{'name': NotRequired[str] | None, 'template': np.ndarray | PathLike | str}, 'mask': np.ndarray | PathLike | str]):
+def merge_layers(layers: list[LayerSpec]):
     canvas: np.ndarray | None = None
     for layer in layers:
         template_nd_arr = parse_layer_image(layer['template'])
@@ -359,6 +388,7 @@ def fit_layer_to_canvas(img: Image.Image, canvas_size: tuple[int, int], fit: str
 
     raise ValueError(f'未知的 fit 模式: {fit}')
 
+
 def test_merge_layers():
     """
     头像合成链（统一输入输出结构，8 个阶段，每个阶段对应一个序列）：
@@ -431,6 +461,289 @@ def test_merge_layers():
     阶段名、实现 stage_branches 的分支与分组归属配置即可自动接入流水线。
     """
 
+    # BackgroundChainNode(
+    #     input=[
+    #         MergeChainNodeGroup(
+    #             name='default',
+    #             layers=[
+    #                 {
+    #                     'template': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'mooncell头像裁剪掩码.png',
+    #                 }
+    #             ]
+    #         )
+    #     ]
+    # ).output()
+    #
+    # AvatarClipChainNode(
+    #     input=[
+    #         MergeChainNodeGroup(
+    #             name='default',
+    #             layers=[
+    #                 # {
+    #                 #     'template': Path(__file__).parent.parent.parent / 'temp' / 'output_background_img.png',
+    #                 # },
+    #                 {
+    #                     'template': Path(__file__).parent.parent.parent / 'res' / 'test' / 'Servant481.jpg',
+    #                     'mask': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'mooncell头像探测掩码.jpg',
+    #                 }
+    #             ]
+    #         )
+    #     ]
+    # ).output()
+
+    # 收集 temp 目录下 "avatar_clip_{num}.png" 形式的图片，按 num 升序作为 template 图层序列
+    temp_dir = Path(__file__).parent.parent.parent / 'temp'
+    clip_paths = sorted(
+        temp_dir.glob('avatar_clip_*.png'),
+        key=lambda p: int(p.stem.split('_')[-1]),
+    )
+
+    ExpandClipChainNode(
+        input=[
+            MergeChainNodeGroup(
+                name='default',
+                layers=[
+                    {
+                        'template': clip_path,
+                    }
+                    for clip_path in clip_paths
+                ]
+            )
+        ]
+    ).output()
+
+
+class MergeChainNodeGroup:
+    name: str
+    layers: list[LayerSpec]
+
+    def __init__(self, name: str = "", layers=None):
+        if layers is None:
+            layers = []
+        self.name = name
+        self.layers = layers
+
+
+class MergeChainNode:
+    input: list[MergeChainNodeGroup]
+
+    def __init__(self, input: list[MergeChainNodeGroup]):
+        self.input = input
+
+    def output(self) -> list[MergeChainNodeGroup]:
+        pass
+
+
+class BackgroundChainNode(MergeChainNode):
+    def output(self) -> list[MergeChainNodeGroup]:
+        first_input_group = self.input[0]
+        background_img_path = first_input_group.layers[0].get('template')
+        if background_img_path is None or not Path(background_img_path).exists():
+            raise ValueError(f"背景图不存在: {background_img_path}")
+        print(f"background_img_path: {background_img_path}")
+        img_arr = parse_layer_image(background_img_path)
+        if img_arr is None:
+            raise ValueError(f"背景图解析失败: {background_img_path}")
+        width, height = img_arr.shape[1], img_arr.shape[0]
+        print(f"width: {width}, height: {height}")
+        # 宽高取出后 img_arr 不再被使用，主动 del 释放其底层像素缓冲区
+        del img_arr
+
+        output_background_img = Image.new('RGBA', (width, height), (0, 0, 0, 255))
+        # output_background_img.show()
+
+        out_put_dir = Path(__file__).parent.parent.parent / 'temp'
+        out_put_file = out_put_dir / 'output_background_img.png'
+        output_background_img.save(out_put_file)
+
+        return [
+            MergeChainNodeGroup(
+                name='default',
+                layers=[
+                    {
+                        'template': out_put_file,
+                    }
+                ]
+            )
+        ]
+
+
+class AvatarClipChainNode(MergeChainNode):
+    steps = 20
+    min_scale = 0.8
+    max_scale = 1.5
+    target_image_path = Path(__file__).parent.parent.parent / "res" / "test" / "哈贝特洛特(Pretender)一破.png"
+
+    def output(self) -> list[MergeChainNodeGroup]:
+        """
+        阶段二：头像序列初始化（avatar，生成，分组透传）
+        输入：分组 "default"，立绘图片（每项 template = 一张立绘）
+        2.1 探测头像位置，获取头像序列的生成范围，根据步进插值获取头像区域序列：
+            记步进为 step（配置 avatar_cfg.step，step = 10 表示从头像的最大和最小范围间取 10 个矩形）
+            记头像区域序列为 r1, r2, r3 .... rn, 1 <= n <= step
+            r1 ... rn 从输入立绘中截取的头像切片为 a1, .... an
+            a1 ... an 保存为临时图片 c1, .... cn（实际实现可添加前缀加以区分）
+            c1, .... cn 分别和 avatar_cfg.mask（"BGO头像裁剪掩码.png"，灰度图）进行逻辑与运算
+            （putalpha，注意掩码是灰度图），回传为 c1, .... cn，得到边缘透明的头像图片序列
+        输出：分组 "default" 不变，序列集 { items: [c1 ... cn] }，每个 c.layers = [背景层, 头像层(clip)]
+        """
+        first_input_group = self.input[0]
+        avatar_img_path = first_input_group.layers[-1].get('template')
+        if avatar_img_path is None or not Path(avatar_img_path).exists():
+            raise ValueError(f"头像文件不存在: {avatar_img_path}")
+        print(f"avatar_img_path: {avatar_img_path}")
+        avatar_img_arr = parse_layer_image(avatar_img_path)
+        if avatar_img_arr is None:
+            raise ValueError(f"头像解析失败: {avatar_img_path}")
+        # width, height = avatar_img_arr.shape[1], avatar_img_arr.shape[0]
+        # avatar_img_arr = cv2.cvtColor(avatar_img_arr, cv2.COLOR_BGR2RGB)
+        #
+        # avatar_mask_file_name = first_input_group.layers[0].get('mask')
+        # avatar_mask_img_arr: np.ndarray | None = None
+        # if not avatar_mask_file_name is None:
+        #     avatar_mask_img_path = Path(avatar_mask_file_name)
+        #     print(f"avatar_mask_img_path: {avatar_mask_img_path}")
+        #     avatar_mask_img_arr = cv2.imdecode(np.fromfile(avatar_mask_img_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+        # cv2.imshow("avatar_img_arr", avatar_img_arr)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
+
+        target_image_arr = cv2.imdecode(np.fromfile(self.target_image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+        target_image_arr = cv2.cvtColor(target_image_arr, cv2.COLOR_BGR2RGB)
+
+        # 调用 detect_cv.detect_avatar 做带掩码的多尺度模板匹配，返回按匹配度降序的结果列表
+        avatar_mask_file_name = first_input_group.layers[-1].get('mask')
+        avatar_mask_img_path = Path(avatar_mask_file_name)
+        results = detect_avatar(
+            target=self.target_image_path,
+            template=avatar_img_path,
+            mask=avatar_mask_img_path,
+            min_scale=self.min_scale,
+            max_scale=self.max_scale,
+            steps=self.steps,
+        )
+        if not results:
+            raise ValueError("头像检测未返回任何匹配结果")
+
+        best = results[0]
+        step = (self.max_scale - self.min_scale) / self.steps
+        rects = []
+        for i in range(int(self.steps / 2)):
+            scale = self.min_scale + i * step
+            print(f"scale = {scale}")
+            x1, y1, x2, y2 = best["rect"]
+            dx = abs(x2 - x1)
+            dy = abs(y2 - y1)
+            rects.append([
+                int(x1 + (dx / 2) * (scale - 1)),
+                int(y1 + (dy / 2) * (scale - 1)),
+                int(x2 + (dx / 2) * (scale - 1)),
+                int(y2 + (dy / 2) * (scale - 1))
+            ])
+        x1, y1, x2, y2 = best["rect"]
+        rects.append([int(x1), int(y1), int(x2), int(y2)])
+        for i in range(int(self.steps / 2) - 1):
+            scale = self.min_scale + (i + int(self.steps / 2) + 1) * step
+            print(f"scale = {scale}")
+            x1, y1, x2, y2 = best["rect"]
+            dx = abs(x2 - x1)
+            dy = abs(y2 - y1)
+            # x1 = x1 - dx * scale
+            # X2 = x2 + y2 * scale
+            rects.append([
+                int(x1 + (dx / 2) * (scale - 1)),
+                int(y1 + (dy / 2) * (scale - 1)),
+                int(x2 + (dx / 2) * (scale - 1)),
+                int(y2 + (dy / 2) * (scale - 1))
+            ])
+        print(json.dumps(rects, indent=4))
+
+        layers = []
+        for index, rect in enumerate(rects):
+            x1, y1, x2, y2 = rect
+            clip_arr = target_image_arr[y1:y2, x1:x2]
+            temp_dir = Path(__file__).parent.parent.parent / "temp"
+            temp_dir.mkdir(exist_ok=True)
+
+            clip_path = temp_dir / f"avatar_clip_{index}.png"
+            img = Image.fromarray(clip_arr)
+            img.save(clip_path)
+            print(f"头像裁剪已保存: {clip_path}")
+            print(f"匹配区域: ({x1}, {y1}) -> ({x2}, {y2})")
+
+            canvas = merge_layers(first_input_group.layers[:-1] + [
+                {
+                    'template': clip_path,
+                    'mask': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'mooncell头像裁剪掩码.png'
+                }
+            ])
+
+            canvas.save(clip_path)
+
+            layers.append({
+                'template': clip_path
+            })
+
+        return [MergeChainNodeGroup(name='default', layers=layers)]
+
+class ExpandClipChainNode(MergeChainNode):
+    def output(self) -> list[MergeChainNodeGroup]:
+        first_input_group = self.input[0]
+        frame_paths = [
+            {
+              'name': '金',
+              'frame': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L0_金框.png',
+            },
+            {
+              'name': '银',
+              'frame': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L0_银框.png',
+            },
+            {
+              'name': '铜',
+              'frame': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L0_铜框.png',
+            },
+            {
+              'name': '铁',
+              'frame': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L0_铁框.png',
+            },
+            {
+              'name': '冠位',
+              'frame': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L0_冠位框.png',
+            },
+            {
+              'name': '满级冠位',
+              'frame': Path(__file__).parent.parent.parent / 'res' / 'foreground' / 'L0_满级冠位框.png',
+            },
+        ]
+
+        # 以 temp 为根目录，按 frame_paths 的 name 分别创建子文件夹 root / f"{name}"
+        root = Path(__file__).parent.parent.parent / 'temp'
+        groups: list[MergeChainNodeGroup] = []
+        for index, frame in enumerate(frame_paths):
+            frame_dir = root / f"{frame['name']}"
+            frame_dir.mkdir(parents=True, exist_ok=True)
+
+            for avatar_foreground in first_input_group.layers:
+                avatar_foreground_path = avatar_foreground.get('template')
+                canvas = merge_layers([
+                    {
+                        'template': frame['frame'],
+                    },
+                    {
+                        'template': avatar_foreground_path,
+                    }
+                ])
+                canvas.save(frame_dir / os.path.basename(avatar_foreground_path))
+
+            # 以 name 作为分组名称，分组目录下的图片作为图层 template
+            layers = [
+                {'template': img_path}
+                for img_path in sorted(frame_dir.glob('*.png'))
+            ]
+            groups.append(MergeChainNodeGroup(name=frame['name'], layers=layers))
+
+        return groups
 
 if __name__ == '__main__':
     unittest.main()
