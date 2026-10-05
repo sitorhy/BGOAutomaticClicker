@@ -457,56 +457,56 @@ def test_merge_layers():
     阶段名、实现 stage_branches 的分支与分组归属配置即可自动接入流水线。
     """
 
-    # BackgroundChainNode(
-    #     input=[
-    #         MergeChainNodeGroup(
-    #             name='default',
-    #             layers=[
-    #                 {
-    #                     'template': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'mooncell头像裁剪掩码.png',
-    #                 }
-    #             ]
-    #         )
-    #     ]
-    # ).output()
-    #
-    # AvatarClipChainNode(
-    #     input=[
-    #         MergeChainNodeGroup(
-    #             name='default',
-    #             layers=[
-    #                 # {
-    #                 #     'template': Path(__file__).parent.parent.parent / 'temp' / 'output_background_img.png',
-    #                 # },
-    #                 {
-    #                     'template': Path(__file__).parent.parent.parent / 'res' / 'test' / 'Servant481.jpg',
-    #                     'mask': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'mooncell头像探测掩码.jpg',
-    #                 }
-    #             ]
-    #         )
-    #     ]
-    # ).output()
+    BackgroundChainNode(
+        input=[
+            MergeChainNodeGroup(
+                name='default',
+                layers=[
+                    {
+                        'template': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'BGO头像裁剪掩码.png',
+                    }
+                ]
+            )
+        ]
+    ).output()
+
+    AvatarClipChainNode(
+        input=[
+            MergeChainNodeGroup(
+                name='default',
+                layers=[
+                    # {
+                    #     'template': Path(__file__).parent.parent.parent / 'temp' / 'output_background_img.png',
+                    # },
+                    {
+                        'template': Path(__file__).parent.parent.parent / 'res' / 'test' / 'Servant481.jpg',
+                        'mask': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'mooncell头像探测掩码.jpg',
+                    }
+                ]
+            )
+        ]
+    ).output()
 
     # 上一阶段：分组展开与边框合成，结果已落盘于 temp/{分组}/，此处暂时注释
-    # temp_dir = Path(__file__).parent.parent.parent / 'temp'
-    # clip_paths = sorted(
-    #     temp_dir.glob('avatar_clip_*.png'),
-    #     key=lambda p: int(p.stem.split('_')[-1]),
-    # )
-    #
-    # ExpandClipChainNode(
-    #     input=[
-    #         MergeChainNodeGroup(
-    #             name='default',
-    #             layers=[
-    #                 {
-    #                     'template': clip_path,
-    #                 }
-    #                 for clip_path in clip_paths
-    #             ]
-    #         )
-    #     ]
-    # ).output()
+    temp_dir = Path(__file__).parent.parent.parent / 'temp'
+    clip_paths = sorted(
+        temp_dir.glob('avatar_clip_*.png'),
+        key=lambda p: int(p.stem.split('_')[-1]),
+    )
+
+    ExpandClipChainNode(
+        input=[
+            MergeChainNodeGroup(
+                name='default',
+                layers=[
+                    {
+                        'template': clip_path,
+                    }
+                    for clip_path in clip_paths
+                ]
+            )
+        ]
+    ).output()
 
     # 从磁盘收集上一阶段落盘的分组图片（temp/{分组}/*.png），作为标签叠加阶段的输入
     label_root = Path(__file__).parent.parent.parent / 'temp'
@@ -520,6 +520,42 @@ def test_merge_layers():
     ]
 
     LabelChainNode(input=label_groups).output()
+
+    status_root = Path(__file__).parent.parent.parent / 'temp'
+    status_groups = [
+        MergeChainNodeGroup(
+            name=d.name,
+            layers=[{'template': f} for f in sorted(d.glob('*.png'))],
+        )
+        for d in status_root.iterdir()
+        if d.is_dir()
+    ]
+
+    StatusChainNode(input=status_groups).output()
+
+    stars_root = Path(__file__).parent.parent.parent / 'temp'
+    stars_groups = [
+        MergeChainNodeGroup(
+            name=d.name,
+            layers=[{'template': f} for f in sorted(d.glob('*.png'))],
+        )
+        for d in stars_root.iterdir()
+        if d.is_dir()
+    ]
+
+    StarsChainNode(input=stars_groups).output()
+
+    class_root = Path(__file__).parent.parent.parent / 'temp'
+    class_groups = [
+        MergeChainNodeGroup(
+            name=d.name,
+            layers=[{'template': f} for f in sorted(d.glob('*.png'))],
+        )
+        for d in class_root.iterdir()
+        if d.is_dir()
+    ]
+
+    ClassChainNode(input=class_groups).output()
 
 
 class MergeChainNodeGroup:
@@ -604,7 +640,7 @@ class AvatarClipChainNode(MergeChainNode):
         avatar_img_arr = parse_layer_image(avatar_img_path)
         if avatar_img_arr is None:
             raise ValueError(f"头像解析失败: {avatar_img_path}")
-        # width, height = avatar_img_arr.shape[1], avatar_img_arr.shape[0]
+        width, height = avatar_img_arr.shape[1], avatar_img_arr.shape[0]
         # avatar_img_arr = cv2.cvtColor(avatar_img_arr, cv2.COLOR_BGR2RGB)
         #
         # avatar_mask_file_name = first_input_group.layers[0].get('mask')
@@ -638,33 +674,33 @@ class AvatarClipChainNode(MergeChainNode):
         best = results[0]
         step = (self.max_scale - self.min_scale) / self.steps
         rects = []
+        dx = width
+        dy = height
+        center_x = best['rect'][0] + dx / 2
+        center_y = best['rect'][1] + dy / 2
         for i in range(int(self.steps / 2)):
             scale = self.min_scale + i * step
             print(f"scale = {scale}")
-            x1, y1, x2, y2 = best["rect"]
-            dx = abs(x2 - x1)
-            dy = abs(y2 - y1)
+            # x1, y1, x2, y2 = best["rect"]
             rects.append([
-                int(x1 + (dx / 2) * (scale - 1)),
-                int(y1 + (dy / 2) * (scale - 1)),
-                int(x2 + (dx / 2) * (scale - 1)),
-                int(y2 + (dy / 2) * (scale - 1))
+                int(center_x - dx / 2 * scale),
+                int(center_y - dy / 2 * scale),
+                int(center_x + dx / 2 * scale),
+                int(center_y + dy / 2 * scale)
             ])
-        x1, y1, x2, y2 = best["rect"]
-        rects.append([int(x1), int(y1), int(x2), int(y2)])
+        # x1, y1 = best["rect"]
+        rects.append([int(best["rect"][0]), int(best["rect"][1]), int(best["rect"][0] + dx), int(best["rect"][1] + dy)])
         for i in range(int(self.steps / 2) - 1):
             scale = self.min_scale + (i + int(self.steps / 2) + 1) * step
             print(f"scale = {scale}")
-            x1, y1, x2, y2 = best["rect"]
-            dx = abs(x2 - x1)
-            dy = abs(y2 - y1)
+            # x1, y1, x2, y2 = best["rect"]
             # x1 = x1 - dx * scale
             # X2 = x2 + y2 * scale
             rects.append([
-                int(x1 + (dx / 2) * (scale - 1)),
-                int(y1 + (dy / 2) * (scale - 1)),
-                int(x2 + (dx / 2) * (scale - 1)),
-                int(y2 + (dy / 2) * (scale - 1))
+                int(center_x - dx / 2 * scale),
+                int(center_y - dy / 2 * scale),
+                int(center_x + dx / 2 * scale),
+                int(center_y + dy / 2 * scale)
             ])
         print(json.dumps(rects, indent=4))
 
@@ -677,6 +713,7 @@ class AvatarClipChainNode(MergeChainNode):
 
             clip_path = temp_dir / f"avatar_clip_{index}.png"
             img = Image.fromarray(clip_arr)
+            img = img.resize((dx, dy))
             img.save(clip_path)
             print(f"头像裁剪已保存: {clip_path}")
             print(f"匹配区域: ({x1}, {y1}) -> ({x2}, {y2})")
@@ -684,7 +721,7 @@ class AvatarClipChainNode(MergeChainNode):
             canvas = merge_layers(first_input_group.layers[:-1] + [
                 {
                     'template': clip_path,
-                    'mask': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'mooncell头像裁剪掩码.png'
+                    'mask': Path(__file__).parent.parent.parent / 'res' / 'mask' / 'BGO头像裁剪掩码.png'
                 }
             ])
 
