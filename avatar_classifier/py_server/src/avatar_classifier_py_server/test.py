@@ -225,7 +225,7 @@ class TestUnit(unittest.TestCase):
         # cv2.imshow('img_target', target_img)
         # cv2.waitKey(0)
         # v2.destroyAllWindows()
-        target_img_clip = target_img[140:284, 192:324]
+        target_img_clip = target_img[133:288, 183:333]
         # cv2.imshow('img_target_clip', target_img_clip)
         # cv2.waitKey(0)
         # cv2.destroyAllWindows()
@@ -236,7 +236,7 @@ class TestUnit(unittest.TestCase):
 
         # 创建背景图，用黑色底填充，大小与裁剪区域相同
         blank_img = Image.new(
-            'RGBA', (target_img_clip.shape[1], target_img_clip.shape[0]), (0, 0, 0, 255))
+            'RGBA', (150, 155), (0, 0, 0, 255))
         # blank_img.show()
 
         # 验证数据
