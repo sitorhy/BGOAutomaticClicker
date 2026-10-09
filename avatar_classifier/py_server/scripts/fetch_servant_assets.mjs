@@ -41,13 +41,18 @@ const get = async (url) => {
 /* {{基础数值}} 里的 |立绘N= / |文件N= 成对出现，只保留 label 为「第N阶段」的再临立绘；
  * Beast 等无阶段划分的从者只有一张「默认」立绘，此时全部取用。 */
 const parseCardFiles = (wiki) => {
+  // console.log(wiki)
   const begin = wiki.indexOf("{{基础数值");
   if (begin < 0) return [];
   const body = wiki.slice(begin, wiki.indexOf("\n}}", begin));
   const labels = new Map([...body.matchAll(/^\|立绘(\d+)=(.*)$/gm)].map((m) => [m[1], m[2].trim()]));
+  // console.log('labels', labels)
   const files = [...body.matchAll(/^\|文件(\d+)=(.*)$/gm)].map((m) => ({ n: m[1], file: m[2].trim() }));
-  const staged = files.filter((f) => /^第[1-9]阶段$/.test((labels.get(f.n) || "").normalize("NFKC")));
-  return (staged.length ? staged : files).map((f) => f.file);
+  console.log('files', files)
+  // const staged = files.filter((f) => /^第[1-9]阶段$/.test((labels.get(f.n) || "").normalize("NFKC")));
+  // console.log('staged', staged)
+  // return (staged.length ? staged : files).map((f) => f.file);
+  return files.map((f) => f.file);
 };
 
 /* {{再临阶段图标}} 可能调用多次（基础 + 灵衣），图标写在 |图标= 或 |图标N= 参数里，
@@ -117,6 +122,7 @@ for (const s of targets) {
       console.log(`      ${f.file} -> ${result}`);
     }
   } catch (e) {
+    console.error(e);
     failed++;
     console.error(`[${s.id}] ${s.name_cn} 失败: ${e.message}`);
   }
