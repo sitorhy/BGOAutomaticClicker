@@ -188,8 +188,9 @@ class AvatarClipChainNode(MergeChainNode):
     steps = 10
     min_scale = 0.8
     max_scale = 1.5
+    
 
-    def __init__(self, input: list[MergeChainNodeGroup], target_image_path: PathLike, clip_mask: PathLike, out_dir: PathLike):
+    def __init__(self, input: list[MergeChainNodeGroup], target_image_path: PathLike, clip_mask: PathLike, out_dir: PathLike, output_size: tuple[int, int]):
         super().__init__(input)
         # 立绘（待探测目标）路径，构造时指定
         self.target_image_path = Path(target_image_path)
@@ -197,6 +198,8 @@ class AvatarClipChainNode(MergeChainNode):
         self.clip_mask = Path(clip_mask)
         # 裁剪产物落盘目录，构造时指定
         self.out_dir = Path(out_dir)
+        # 裁剪产物尺寸，基于检测位置扩充至指定大小
+        self.output_size = output_size
 
     def output(self) -> list[MergeChainNodeGroup]:
         """
@@ -251,10 +254,25 @@ class AvatarClipChainNode(MergeChainNode):
             raise ValueError("头像检测未返回任何匹配结果")
 
         best = results[0]
+
+        # best 的 rect 是检测图（立绘）中匹配到的区域，尺寸等于该尺度下缩放后的模板；
+        # 而后续图层合并、前景素材均按 output_size 设计，直接按 rect 裁剪再合并会引入缩放。
+        # 因此沿 best 的中心向外扩充裁剪区域，使其大小等于 output_size，
+        # 让从立绘裁剪出的区域本身即为 output_size，合并时不再需要缩放。
+        out_w, out_h = self.output_size
+        bx1, by1, bx2, by2 = best['rect']
+        bcx = (bx1 + bx2) / 2
+        bcy = (by1 + by2) / 2
+        best = {**best, 'rect': (
+            int(bcx - out_w / 2), int(bcy - out_h / 2),
+            int(bcx + out_w / 2), int(bcy + out_h / 2),
+        )}
+
         step = (self.max_scale - self.min_scale) / self.steps
         rects = []
-        dx = width
-        dy = height
+        # 裁剪/合并基准尺寸改为 output_size，best 已按此尺寸扩充，基准裁剪无需缩放
+        dx = out_w
+        dy = out_h
         center_x = best['rect'][0] + dx / 2
         center_y = best['rect'][1] + dy / 2
         for i in range(int(self.steps / 2)):
@@ -571,3 +589,65 @@ class ClassChainNode(MergeChainNode):
                         p.unlink()
 
         return groups
+
+class NormalizeChainNode(MergeChainNode):
+    def __init__(self, input: list[MergeChainNodeGroup], out_dir: PathLike, output_size: tuple[int, int], background_color: tuple[int, int, int, int] = (0, 0, 0, 255), delete_old: bool = False):
+        super().__init__(input)
+        # 分组图片输出根目录，构造时指定
+        self.out_dir = Path(out_dir)
+        # 新分组图片生成后是否移除上一流程生成的旧图片，默认 False（不删除）
+        self.delete_old = delete_old
+        # 输出图片大小
+        self.output_size = output_size
+        # 输出图片背景色
+        self.background_color = background_color
+        
+
+    def output(self) -> list[MergeChainNodeGroup]:
+        root = self.out_dir
+        cw, ch = self.output_size
+        groups: list[MergeChainNodeGroup] = []
+        for group in self.input:
+            group_dir = root / group.name
+            group_dir.mkdir(parents=True, exist_ok=True)
+
+            new_layers: list[LayerSpec] = []
+            old_paths: list = []
+            for layer in group.layers:
+                img_path = layer.get('template')
+                if img_path is None:
+                    continue
+                old_paths.append(img_path)
+
+                canvas = Image.new('RGBA', (cw, ch), self.background_color)
+
+                # 读取图片并统一为 RGBA（parse_layer_image 已完成 BGR(A)->RGB(A) 转换）
+                img_arr = parse_layer_image(img_path)
+                if img_arr is None:
+                    raise ValueError(f"图片解析失败: {img_path}")
+                img = Image.fromarray(img_arr)
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+
+                # 以画布中心为基准计算偏移，将图片居中放置
+                offset = ((cw - img.width) // 2, (ch - img.height) // 2)
+                # 第 3 个参数传入 img 自身作为 mask，保留透明区域不被覆盖
+                canvas.paste(img, offset, img)
+
+                out_path = group_dir / f"{Path(str(img_path)).stem}_normalized.png"
+                print(f"保存图片: {out_path}")
+                canvas.save(out_path)
+                new_layers.append({'template': out_path})
+
+            # 输出分组名称不变，仅图层发生变化
+            groups.append(MergeChainNodeGroup(name=group.name, layers=new_layers))
+
+            # 新图片生成后，按需移除上一流程生成的旧图片
+            if self.delete_old:
+                for old_path in old_paths:
+                    p = Path(str(old_path))
+                    if p.exists():
+                        p.unlink()
+
+        return groups
+                

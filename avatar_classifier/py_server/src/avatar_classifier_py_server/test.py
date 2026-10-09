@@ -16,6 +16,7 @@ from .merge_chain import (
     StatusChainNode,
     StarsChainNode,
     ClassChainNode,
+    NormalizeChainNode,
 )
 
 """
@@ -288,6 +289,26 @@ class TestUnit(unittest.TestCase):
 
     def test_merge_layers_chained(self):
         test_merge_layers_chained()
+        
+    def test_pic_normalize(self):
+        """统一训练集的图片大小，使用指定颜色作为背景色，如果使用归一化处理，模型输入的图片也需要归一化处理"""
+        
+        output_dir = Path(__file__).parent.parent.parent / 'temp'
+        NormalizeChainNode(
+            input=[
+                MergeChainNodeGroup(
+                    name='default',
+                    layers=[
+                        {
+                            'template': RES_DIR / 'test' / 'Servant481.jpg'
+                        }
+                    ]
+                )
+            ],
+            out_dir=output_dir,
+            output_size=(512, 512),
+            background_color=(128, 128, 128, 255),
+        ).output()
 
 
 def test_merge_layers():
@@ -359,69 +380,87 @@ def test_merge_layers():
     """
 
     # 输出目录，供各阶段节点做输入输出解耦配置（此处指向内存盘）
-    output_dir = Path("F:\\")
+    output_dir = Path("F:\\test")
 
     fg_dir = RES_DIR / 'foreground'
 
-    BackgroundChainNode(
-        input=[
-            MergeChainNodeGroup(
-                name='default',
-                layers=[
-                    {
-                        'template': RES_DIR / 'mask' / 'BGO头像裁剪掩码.png',
-                    }
-                ]
-            )
-        ],
-        out_put_file=output_dir / 'output_background_img.png',
-    ).output()
+    # ── 执行范围限制 ──────────────────────────────────────────────
+    # 每个阶段（ChainNode）对应一个步骤 flag，仅当对应 flag 为 True 时才执行该阶段，
+    # 便于单独跑流水线中的任意一段而不必串联整条链（各阶段以磁盘 output_dir 解耦输入输出）。
+    # 需要跳过某阶段就把其值置为 False，默认全部执行。
+    run_steps = {
+        'background': True,
+        'avatar': True,
+        'expand': True,
+        'label': True,
+        'status': True,
+        'stars': True,
+        'class': True,
+    }
 
-    AvatarClipChainNode(
-        input=[
-            MergeChainNodeGroup(
-                name='default',
-                layers=[
-                    {
-                        'template': RES_DIR / 'test' / 'Servant481.jpg',
-                        'mask': RES_DIR / 'mask' / 'mooncell头像探测掩码.jpg',
-                    }
-                ]
-            )
-        ],
-        target_image_path=RES_DIR / 'test' / '哈贝特洛特(Pretender)一破.png',
-        clip_mask=RES_DIR / 'mask' / 'BGO头像裁剪掩码.png',
-        out_dir=output_dir,
-    ).output()
+    if run_steps['background']:
+        BackgroundChainNode(
+            input=[
+                MergeChainNodeGroup(
+                    name='default',
+                    layers=[
+                        {
+                            'template': RES_DIR / 'mask' / 'BGO头像裁剪掩码.png',
+                        }
+                    ]
+                )
+            ],
+            out_put_file=output_dir / 'output_background_img.png',
+        ).output()
 
-    # 上一阶段：分组展开与边框合成，结果已落盘于 output_dir/{分组}/，此处暂时注释
-    clip_paths = sorted(
-        output_dir.glob('avatar_clip_*.png'),
-        key=lambda p: int(p.stem.split('_')[-1]),
-    )
+    if run_steps['avatar']:
+        AvatarClipChainNode(
+            input=[
+                MergeChainNodeGroup(
+                    name='default',
+                    layers=[
+                        {
+                            'template': RES_DIR / 'test' / 'Servant481.jpg',
+                            'mask': RES_DIR / 'mask' / 'mooncell头像探测掩码.jpg',
+                        }
+                    ]
+                )
+            ],
+            target_image_path=RES_DIR / 'test' / '哈贝特洛特(Pretender)一破.png',
+            clip_mask=RES_DIR / 'mask' / 'BGO头像裁剪掩码.png',
+            out_dir=output_dir,
+            output_size=(150, 155),
+        ).output()
 
-    ExpandClipChainNode(
-        input=[
-            MergeChainNodeGroup(
-                name='default',
-                layers=[
-                    {
-                        'template': clip_path,
-                    }
-                    for clip_path in clip_paths
-                ]
-            )
-        ],
-        out_dir=output_dir,
-        frame_paths=[
-            {'name': '金', 'frame': fg_dir / 'L0_金框.png'},
-            {'name': '银', 'frame': fg_dir / 'L0_银框.png'},
-            {'name': '铜', 'frame': fg_dir / 'L0_铜框.png'},
-            {'name': '铁', 'frame': fg_dir / 'L0_铁框.png'},
-            {'name': '冠位', 'frame': fg_dir / 'L0_冠位框.png'},
-            {'name': '满级冠位', 'frame': fg_dir / 'L0_满级冠位框.png'},
-        ],
-    ).output()
+    if run_steps['expand']:
+        # 从 avatar 阶段落盘的裁剪图（output_dir/avatar_clip_*.png）作为本阶段输入
+        clip_paths = sorted(
+            output_dir.glob('avatar_clip_*.png'),
+            key=lambda p: int(p.stem.split('_')[-1]),
+        )
+
+        ExpandClipChainNode(
+            input=[
+                MergeChainNodeGroup(
+                    name='default',
+                    layers=[
+                        {
+                            'template': clip_path,
+                        }
+                        for clip_path in clip_paths
+                    ]
+                )
+            ],
+            out_dir=output_dir,
+            frame_paths=[
+                {'name': '金', 'frame': fg_dir / 'L0_金框.png'},
+                {'name': '银', 'frame': fg_dir / 'L0_银框.png'},
+                {'name': '铜', 'frame': fg_dir / 'L0_铜框.png'},
+                {'name': '铁', 'frame': fg_dir / 'L0_铁框.png'},
+                {'name': '冠位', 'frame': fg_dir / 'L0_冠位框.png'},
+                {'name': '满级冠位', 'frame': fg_dir / 'L0_满级冠位框.png'},
+            ],
+        ).output()
 
     # 从磁盘收集上一阶段落盘的分组图片（output_dir/{分组}/*.png），作为后续叠加阶段的输入
     def collect_groups(root: Path) -> list[MergeChainNodeGroup]:
@@ -434,63 +473,67 @@ def test_merge_layers():
             if d.is_dir()
         ]
 
-    LabelChainNode(
-        input=collect_groups(output_dir),
-        out_dir=output_dir,
-        label_paths=[
-            {'name': '金', 'labels': [fg_dir / 'L1_金标.png', fg_dir / 'L1_满级金标.png']},
-            {'name': '银', 'labels': [fg_dir / 'L1_银标.png']},
-            {'name': '铜', 'labels': [fg_dir / 'L1_铜标.png']},
-            {'name': '铁', 'labels': [fg_dir / 'L1_铁标.png']},
-            {'name': '冠位', 'labels': [fg_dir / 'L1_冠位标.png']},
-            {'name': '满级冠位', 'labels': [fg_dir / 'L1_满级冠位标.png']},
-        ],
-    ).output()
+    if run_steps['label']:
+        LabelChainNode(
+            input=collect_groups(output_dir),
+            out_dir=output_dir,
+            label_paths=[
+                {'name': '金', 'labels': [fg_dir / 'L1_金标.png', fg_dir / 'L1_满级金标.png']},
+                {'name': '银', 'labels': [fg_dir / 'L1_银标.png']},
+                {'name': '铜', 'labels': [fg_dir / 'L1_铜标.png']},
+                {'name': '铁', 'labels': [fg_dir / 'L1_铁标.png']},
+                {'name': '冠位', 'labels': [fg_dir / 'L1_冠位标.png']},
+                {'name': '满级冠位', 'labels': [fg_dir / 'L1_满级冠位标.png']},
+            ],
+        ).output()
 
-    StatusChainNode(
-        input=collect_groups(output_dir),
-        out_dir=output_dir,
-        status_paths=[
-            {'name': name, 'status': [fg_dir / 'L1_满破标.png']}
-            for name in ('金', '银', '铜', '铁', '冠位', '满级冠位')
-        ],
-    ).output()
+    if run_steps['status']:
+        StatusChainNode(
+            input=collect_groups(output_dir),
+            out_dir=output_dir,
+            status_paths=[
+                {'name': name, 'status': [fg_dir / 'L1_满破标.png']}
+                for name in ('金', '银', '铜', '铁', '冠位', '满级冠位')
+            ],
+        ).output()
 
-    # 金/冠位/满级冠位共用同一套完整星标序列
-    gold_stars = [
-        'L1_1星再临', 'L1_1星冠位', 'L1_2星再临', 'L1_2星冠位',
-        'L1_3星再临', 'L1_3星冠位', 'L1_4星', 'L1_4星再临', 'L1_4星冠位',
-        'L1_5星', 'L1_5星再临', 'L1_5星冠位',
-    ]
-    stars_chain = {
-        '金': gold_stars,
-        '银': ['L1_1星再临', 'L1_2星再临', 'L1_3星'],
-        '铜': ['L1_1星再临', 'L1_2星'],
-        '铁': ['L1_2星再临', 'L1_2星'],
-        '冠位': gold_stars,
-        '满级冠位': gold_stars,
-    }
-    StarsChainNode(
-        input=collect_groups(output_dir),
-        out_dir=output_dir,
-        stars_paths=[
-            {'name': name, 'stars': [fg_dir / f'{p}.png' for p in paths]}
-            for name, paths in stars_chain.items()
-        ],
-    ).output()
+    if run_steps['stars']:
+        # 金/冠位/满级冠位共用同一套完整星标序列
+        gold_stars = [
+            'L1_1星再临', 'L1_1星冠位', 'L1_2星再临', 'L1_2星冠位',
+            'L1_3星再临', 'L1_3星冠位', 'L1_4星', 'L1_4星再临', 'L1_4星冠位',
+            'L1_5星', 'L1_5星再临', 'L1_5星冠位',
+        ]
+        stars_chain = {
+            '金': gold_stars,
+            '银': ['L1_1星再临', 'L1_2星再临', 'L1_3星'],
+            '铜': ['L1_1星再临', 'L1_2星'],
+            '铁': ['L1_2星再临', 'L1_2星'],
+            '冠位': gold_stars,
+            '满级冠位': gold_stars,
+        }
+        StarsChainNode(
+            input=collect_groups(output_dir),
+            out_dir=output_dir,
+            stars_paths=[
+                {'name': name, 'stars': [fg_dir / f'{p}.png' for p in paths]}
+                for name, paths in stars_chain.items()
+            ],
+        ).output()
 
-    ClassChainNode(
-        input=collect_groups(output_dir),
-        out_dir=output_dir,
-        class_paths=[
-            {'name': '金', 'class': [fg_dir / '金卡Breakser.png']},
-            {'name': '银', 'class': [fg_dir / '银卡Berserker.png']},
-            {'name': '铜', 'class': [fg_dir / '铜卡Berserker.png']},
-            {'name': '铁', 'class': []},
-            {'name': '冠位', 'class': []},
-            {'name': '满级冠位', 'class': []},
-        ],
-    ).output()
+    if run_steps['class']:
+        ClassChainNode(
+            input=collect_groups(output_dir),
+            out_dir=output_dir,
+            class_paths=[
+                {'name': '金', 'class': [fg_dir / '金卡Breakser.png']},
+                {'name': '银', 'class': [fg_dir / '银卡Berserker.png']},
+                {'name': '铜', 'class': [fg_dir / '铜卡Berserker.png']},
+                {'name': '铁', 'class': []},
+                {'name': '冠位', 'class': [fg_dir / '冠位Berserker.png']},
+                {'name': '满级冠位', 'class': [fg_dir / '冠位Berserker.png']},
+            ],
+        ).output()
 
 
 def test_merge_layers_chained():
