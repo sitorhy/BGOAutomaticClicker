@@ -309,6 +309,25 @@ class TestUnit(unittest.TestCase):
             output_size=(512, 512),
             background_color=(128, 128, 128, 255),
         ).output()
+        
+    def test_background_chain_node(self):
+        out_dir = Path(__file__).parent.parent.parent / 'temp'
+        BackgroundChainNode(
+            input=[
+                MergeChainNodeGroup(
+                    name='default',
+                    layers=[
+                        {
+                            'template': Path(__file__).parent.parent.parent / 'res' / 'test' / '马赛克融合背景.png'
+                        }
+                    ]
+                )
+            ],
+            alpha=0.8,
+            target_image_path=Path(__file__).parent.parent.parent / 'res' / 'test' / '哈贝特洛特(Pretender)_status_1.png',
+            out_dir=out_dir,
+            output_size=(512, 512),
+        ).output()
 
 
 def test_merge_layers():
@@ -389,7 +408,6 @@ def test_merge_layers():
     # 便于单独跑流水线中的任意一段而不必串联整条链（各阶段以磁盘 output_dir 解耦输入输出）。
     # 需要跳过某阶段就把其值置为 False，默认全部执行。
     run_steps = {
-        'background': True,
         'avatar': True,
         'expand': True,
         'label': True,
@@ -397,21 +415,6 @@ def test_merge_layers():
         'stars': True,
         'class': True,
     }
-
-    if run_steps['background']:
-        BackgroundChainNode(
-            input=[
-                MergeChainNodeGroup(
-                    name='default',
-                    layers=[
-                        {
-                            'template': RES_DIR / 'mask' / 'BGO头像裁剪掩码.png',
-                        }
-                    ]
-                )
-            ],
-            out_put_file=output_dir / 'output_background_img.png',
-        ).output()
 
     if run_steps['avatar']:
         AvatarClipChainNode(
@@ -538,9 +541,8 @@ def test_merge_layers():
 
 def test_merge_layers_chained():
     """
-    照抄 test_merge_layers，但做两点调整：
-      1. 排除阶段一 BackgroundChainNode，从阶段二 AvatarClipChainNode 开始；
-      2. 不再从磁盘 glob / collect_groups 收集中间产物，而是把每个 ChainNode 的
+    照抄 test_merge_layers，但做以下调整：
+         不再从磁盘 glob / collect_groups 收集中间产物，而是把每个 ChainNode 的
          .output() 返回值直接作为下一个 ChainNode 的 input，内存中逐阶段串联。
 
     阶段流转（与 test_merge_layers 一致，仅去掉 background）：

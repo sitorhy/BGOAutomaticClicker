@@ -145,43 +145,65 @@ class MergeChainNode:
 
 
 class BackgroundChainNode(MergeChainNode):
+    """
+    将立绘与指定背景图按融合为新新训练图，
+    alpha 为整体透明度，取值 0.0 - 1.0, 默认 0.8
+    target_image_path: PathLike, 立绘图片路径
+    input: list[MergeChainNodeGroup], 指定 template 为图片路径, 分组只有一个
+    output_size: tuple[int, int], 图片大小，背景会被拉伸至 output_size，立绘会居中放置
+    """
     # 背景图落盘路径，构造对象时指定（输入输出解耦）
-    out_put_file: PathLike
+    out_dir: PathLike
 
-    def __init__(self, input: list[MergeChainNodeGroup], out_put_file: PathLike):
+    def __init__(self, input: list[MergeChainNodeGroup], out_dir: PathLike, target_image_path: PathLike, output_size: tuple[int, int],  alpha: int = int(0.8 * 255)):
         super().__init__(input)
-        self.out_put_file = Path(out_put_file)
+        self.out_dir = Path(out_dir)
+        self.alpha = alpha
+        self.target_image_path = Path(target_image_path)
+        self.output_size = output_size
+        
 
     def output(self) -> list[MergeChainNodeGroup]:
+        # 只取第一个分组即可
         first_input_group = self.input[0]
-        background_img_path = first_input_group.layers[0].get('template')
-        if background_img_path is None or not Path(background_img_path).exists():
-            raise ValueError(f"背景图不存在: {background_img_path}")
-        print(f"background_img_path: {background_img_path}")
-        img_arr = parse_layer_image(background_img_path)
-        if img_arr is None:
-            raise ValueError(f"背景图解析失败: {background_img_path}")
-        width, height = img_arr.shape[1], img_arr.shape[0]
-        print(f"width: {width}, height: {height}")
-        # 宽高取出后 img_arr 不再被使用，主动 del 释放其底层像素缓冲区
-        del img_arr
+        
+        for i, layer in enumerate(first_input_group.layers):
+            print(f"template: {layer['template']}")
+            canvas = Image.new('RGBA', self.output_size, (0, 0, 0, 0))
+            bg_img_arr = parse_layer_image(layer['template'])
+            cv2.cvtColor(bg_img_arr, cv2.COLOR_BGR2RGB)
+            bg_img = Image.fromarray(bg_img_arr).convert('RGBA')
+            
+            cw, ch = self.output_size
+            iw, ih = bg_img.size
+            scale = max(cw / iw, ch / ih)
+            resized = bg_img.resize((max(1, round(iw * scale)), max(1, round(ih * scale))))
+            # 居中裁剪到画布大小
+            left = (resized.width - cw) // 2
+            top = (resized.height - ch) // 2
+            bg_img = resized.crop((left, top, left + cw, top + ch))
+            
+            target_image_arr = parse_layer_image(self.target_image_path)
+            cv2.cvtColor(target_image_arr, cv2.COLOR_BGR2RGB)
+            target_image = Image.fromarray(target_image_arr).convert('RGBA')
+            target_x = (cw - target_image.width) // 2
+            target_y = (ch - target_image.height) // 2
+            
+            # 修改立绘的透明通道数值
+            if self.alpha is not None and self.alpha < 1.0:
+                r, g, b, a = target_image.split()
+                a = a.point(lambda p: int(p * self.alpha))
+                target_image = Image.merge('RGBA', (r, g, b, a))
+            
+            canvas.paste(bg_img, (0, 0))
+            canvas.alpha_composite(target_image, (target_x, target_y))
+            
+            target_file_name = self.target_image_path.stem;
+            canvas_output_file_path = self.out_dir / f"{target_file_name}_bg_mesh_{i}.png"
+            canvas.save(canvas_output_file_path)
+            
 
-        output_background_img = Image.new('RGBA', (width, height), (0, 0, 0, 255))
-        # output_background_img.show()
-
-        self.out_put_file.parent.mkdir(parents=True, exist_ok=True)
-        output_background_img.save(self.out_put_file)
-
-        return [
-            MergeChainNodeGroup(
-                name='default',
-                layers=[
-                    {
-                        'template': self.out_put_file,
-                    }
-                ]
-            )
-        ]
+        return []
 
 
 class AvatarClipChainNode(MergeChainNode):
