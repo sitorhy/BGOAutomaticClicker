@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter, ImageDraw
 from typing_extensions import NotRequired, TypedDict
 import cv2
 
@@ -186,17 +186,63 @@ class BackgroundChainNode(MergeChainNode):
             target_image_arr = parse_layer_image(self.target_image_path)
             cv2.cvtColor(target_image_arr, cv2.COLOR_BGR2RGB)
             target_image = Image.fromarray(target_image_arr).convert('RGBA')
-            target_x = (cw - target_image.width) // 2
-            target_y = (ch - target_image.height) // 2
+            
+            # 对立绘进行边缘高斯模糊处理，淡化边缘的特征影响
+            # 制作一个“边缘白、中间黑”（或带渐变）的遮罩（Mask），然后将“整张图高斯模糊后”与“原图”按遮罩进行合成。
+            # 放大立绘，流出模糊边缘距离
+            zoom_w = max(1, round(target_image.width * 1.5))
+            zoom_h = max(1, round(target_image.height * 1.5))
+            zoom_target_image = Image.new("RGBA", (zoom_w, zoom_h), (255, 255, 255, 0))
+            zoom_target_image.alpha_composite(target_image.convert("RGBA"), ((zoom_w - target_image.width) // 2, (zoom_h - target_image.height) // 2))
+            blur_zoom_target_image = zoom_target_image.filter(ImageFilter.GaussianBlur(radius=15))
+
+            # 创建一个黑白遮罩（Mask），用于控制“哪里用模糊图、哪里用清晰原图”
+            # Image.composite(blur_img, sharp_img, mask)：mask=255 处取 blur_img（模糊），mask=0 处取 sharp_img（清晰）
+            # 所以遮罩应该是“边缘白、中间黑”，而不是当前的“整块内容区域都是白”，否则整张图（含中间）都会被模糊
+            # 初始为全黑图像（模式 'L'），默认全部使用清晰原图
+            mask = Image.new('L', (zoom_w, zoom_h), 0)
+            draw = ImageDraw.Draw(mask)
+
+            # 立绘内容区域在放大画布中的矩形边界
+            content_left = (zoom_w - target_image.width) // 2
+            content_top = (zoom_h - target_image.height) // 2
+            content_right = content_left + target_image.width
+            content_bottom = content_top + target_image.height
+
+            # margin 表示边缘模糊带的宽度（像素）
+            margin = 40
+
+            # 1) 先把整块内容区域标记为“需要模糊”（白色）
+            draw.rectangle([content_left, content_top, content_right, content_bottom], fill=255)
+            # 2) 再把内容区域中心（向内收缩 margin 的部分）“挖”回黑色，表示这部分保持清晰
+            draw.rectangle(
+                [content_left + margin, content_top + margin, content_right - margin, content_bottom - margin],
+                fill=0,
+            )
+
+            # 3) 对遮罩本身进行高斯模糊，让“边缘模糊带”与“中心清晰区”之间过渡柔和（产生渐变效果）
+            mask = mask.filter(ImageFilter.GaussianBlur(radius=margin / 2))
+
+            # 4) 使用 mask 将模糊图（边缘）和原图（中心）合成：mask=255 处取模糊图，mask=0 处取清晰原图
+            output = Image.composite(blur_zoom_target_image, zoom_target_image, mask)
+            
+            
+            # 查看效果
+            #mask.save(self.out_dir / f"mask.jpg")
+            #output.save(self.out_dir / f"test_blurred.png")
+
             
             # 修改立绘的透明通道数值
             if self.alpha is not None and self.alpha < 1.0:
-                r, g, b, a = target_image.split()
+                r, g, b, a = output.split()
                 a = a.point(lambda p: int(p * self.alpha))
-                target_image = Image.merge('RGBA', (r, g, b, a))
+                output = Image.merge('RGBA', (r, g, b, a))
             
             canvas.paste(bg_img, (0, 0))
-            canvas.alpha_composite(target_image, (target_x, target_y))
+            
+            target_x = (cw - output.width) // 2
+            target_y = (ch - output.height) // 2
+            canvas.alpha_composite(output, (target_x, target_y))
             
             target_file_name = self.target_image_path.stem;
             canvas_output_file_path = self.out_dir / f"{target_file_name}_bg_mesh_{i}.png"

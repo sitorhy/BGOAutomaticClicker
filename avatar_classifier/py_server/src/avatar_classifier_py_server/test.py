@@ -323,10 +323,10 @@ class TestUnit(unittest.TestCase):
                     ]
                 )
             ],
-            alpha=0.8,
+            alpha=0.86,
             target_image_path=Path(__file__).parent.parent.parent / 'res' / 'test' / '哈贝特洛特(Pretender)_status_1.png',
             out_dir=out_dir,
-            output_size=(512, 512),
+            output_size=(300, 300),
         ).output()
 
 
