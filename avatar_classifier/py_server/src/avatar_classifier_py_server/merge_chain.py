@@ -825,6 +825,71 @@ class ClassChainNode(MergeChainNode):
 
         return groups
 
+class ClassifyChainNode(MergeChainNode):
+    """图片分类节点：扫描目录下的图片，根据尺寸进行分组。
+
+    分组规则（SIZE_MAP）：
+      status    : 256 x 256
+      avatar    : 132 x 144
+      character : 512 x 724
+
+    输入：input_dir 目录路径（扫描该目录下的所有图片文件）
+    输出：按尺寸分组的 MergeChainNodeGroup 列表，每个分组的 layers 中
+          template 为图片文件的 Path 对象
+    """
+    # 图片尺寸 -> 分组名称映射
+    SIZE_MAP: dict[tuple[int, int], str] = {
+        (256, 256): 'status',
+        (132, 144): 'avatar',
+        (512, 724): 'character',
+    }
+
+    def __init__(self, input_dir: PathLike):
+        super().__init__(input=[])
+        self.input_dir = Path(input_dir)
+
+    def output(self) -> list[MergeChainNodeGroup]:
+        input_dir = self.input_dir
+        if not input_dir.is_dir():
+            raise ValueError(f"输入目录不存在或不是目录: {input_dir}")
+
+        # 分组名称 -> 文件路径列表
+        groups_map: dict[str, list[Path]] = {name: [] for name in self.SIZE_MAP.values()}
+        # 未匹配到已知尺寸的文件暂存到 unknown 分组
+        unknown_files: list[Path] = []
+
+        for file_path in sorted(input_dir.iterdir()):
+            if not file_path.is_file():
+                continue
+            try:
+                with Image.open(file_path) as img:
+                    size = img.size
+            except Exception as e:
+                print(f"  跳过无法解析的文件: {file_path.name} ({e})")
+                continue
+
+            group_name = self.SIZE_MAP.get(size)
+            if group_name:
+                groups_map[group_name].append(file_path)
+            else:
+                unknown_files.append(file_path)
+
+        if unknown_files:
+            groups_map['unknown'] = unknown_files
+            print(f"  发现 {len(unknown_files)} 个未匹配尺寸的文件")
+
+        # 构建输出分组，过滤掉空分组
+        result: list[MergeChainNodeGroup] = []
+        for group_name, files in groups_map.items():
+            if files:
+                result.append(MergeChainNodeGroup(
+                    name=group_name,
+                    layers=[{'template': f} for f in files],
+                ))
+
+        return result
+
+
 class NormalizeChainNode(MergeChainNode):
     def __init__(self, input: list[MergeChainNodeGroup], out_dir: PathLike, output_size: tuple[int, int], background_color: tuple[int, int, int, int] = (0, 0, 0, 255), delete_old: bool = False):
         super().__init__(input)

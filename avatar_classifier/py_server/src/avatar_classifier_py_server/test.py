@@ -18,6 +18,7 @@ from .merge_chain import (
     ClassChainNode,
     NormalizeChainNode,
     SupportFrameChainNode,
+    ClassifyChainNode,
 )
 
 """
@@ -332,6 +333,39 @@ class TestUnit(unittest.TestCase):
             horizontal_offset=(0, 0),
             offset_steps=5,
         ).output()
+
+    def test_classify_chain_node(self):
+        """图片分类节点：按尺寸将目录中的图片分组为 status / avatar / character"""
+        input_dir = RES_DIR / 'assets' / '1'
+        groups = ClassifyChainNode(input_dir=input_dir).output()
+
+        # 按分组名建立索引，便于断言
+        groups_by_name = {g.name: g for g in groups}
+
+        # 应至少包含 avatar、character、status 三个分组
+        self.assertIn('avatar', groups_by_name, '应包含 avatar 分组 (132x144)')
+        self.assertIn('character', groups_by_name, '应包含 character 分组 (512x724)')
+        self.assertIn('status', groups_by_name, '应包含 status 分组 (256x256)')
+
+        # 验证各分组中的文件名
+        avatar_names = [Path(str(l['template'])).name for l in groups_by_name['avatar'].layers]
+        character_names = [Path(str(l['template'])).name for l in groups_by_name['character'].layers]
+        status_names = [Path(str(l['template'])).name for l in groups_by_name['status'].layers]
+
+        self.assertIn('Servant001.jpg', avatar_names)
+        self.assertIn('玛修2.0.png', character_names)
+        self.assertIn('玛修·基列莱特灵衣15头像.png', status_names)
+
+        # 验证每个分组的 layers 中 template 均为存在的文件路径
+        for group in groups:
+            for layer in group.layers:
+                self.assertTrue(Path(str(layer['template'])).is_file(),
+                                f"文件不存在: {layer['template']} (分组: {group.name})")
+
+        # 打印分组结果供人工确认
+        for group in groups:
+            names = [Path(str(l['template'])).name for l in group.layers]
+            print(f"  {group.name}: {names}")
 
     def test_background_chain_node(self):
         out_dir = Path(__file__).parent.parent.parent / 'temp'
