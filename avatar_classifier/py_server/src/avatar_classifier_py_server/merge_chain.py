@@ -398,6 +398,173 @@ class AvatarClipChainNode(MergeChainNode):
         return [MergeChainNodeGroup(name='default', layers=layers)]
 
 
+class SupportFrameChainNode(MergeChainNode):
+    """助战框合成节点：从立绘中检测头像位置，扩充到助战框尺寸后与边框前景合成。
+
+    流程：
+      1. 调用 detect_avatar 在立绘中检测头像位置（带掩码多尺度模板匹配）
+      2. 以检测区域中心为基准，结合偏移参数生成多个裁剪矩形
+      3. 每个矩形裁剪后与掩码合成（中间有像素、四周透明）
+      4. 临时图直接盖在前景图上，输出所有偏移组合的合成结果
+
+    偏移参数说明：
+      vertical_offset   - 垂直偏移范围 (min, max)，例如 (-10, 10)
+      horizontal_offset - 水平偏移范围 (min, max)，默认 (0, 0)
+      offset_steps      - 各轴插值数量，例如 5 表示每轴取 5 个等距值
+                          总组合数 = steps_v × steps_h（去重后），含 0 偏移
+    """
+    steps = 10
+    min_scale = 0.8
+    max_scale = 1.5
+
+    def __init__(
+        self,
+        input: list[MergeChainNodeGroup],
+        target_image_path: PathLike,
+        avatar_template: PathLike,
+        avatar_mask: PathLike,
+        support_frame_mask: PathLike,
+        support_frame_foreground: PathLike,
+        out_dir: PathLike,
+        vertical_offset: tuple[int, int] = (0, 0),
+        horizontal_offset: tuple[int, int] = (0, 0),
+        offset_steps: int = 1,
+    ):
+        super().__init__(input)
+        # 立绘（待探测目标）路径
+        self.target_image_path = Path(target_image_path)
+        # 头像模板图片路径（用于模板匹配）
+        self.avatar_template = Path(avatar_template)
+        # 头像探测掩码路径
+        self.avatar_mask = Path(avatar_mask)
+        # 助战框掩码路径（与助战框前景图同尺寸，控制头像可见区域）
+        self.support_frame_mask = Path(support_frame_mask)
+        # 助战框前景图路径（如金助战框.png）
+        self.support_frame_foreground = Path(support_frame_foreground)
+        # 合成产物落盘目录
+        self.out_dir = Path(out_dir)
+        # 垂直偏移范围 (min, max)，单位像素
+        self.vertical_offset = vertical_offset
+        # 水平偏移范围 (min, max)，单位像素
+        self.horizontal_offset = horizontal_offset
+        # 各轴插值数量，最少为 1
+        self.offset_steps = max(1, int(offset_steps))
+
+    def _build_offset_pairs(self) -> list[tuple[int, int]]:
+        """根据偏移范围和插值数量，生成所有 (dx, dy) 偏移对（去重）。"""
+        v_min, v_max = self.vertical_offset
+        h_min, h_max = self.horizontal_offset
+        n = self.offset_steps
+
+        if n == 1 or (v_min == v_max and h_min == h_max):
+            return [(0, 0)]
+
+        v_values = np.linspace(v_min, v_max, n).astype(int) if v_min != v_max else np.array([0])
+        h_values = np.linspace(h_min, h_max, n).astype(int) if h_min != h_max else np.array([0])
+
+        pairs: list[tuple[int, int]] = []
+        seen: set[tuple[int, int]] = set()
+        for dy in v_values:
+            for dx in h_values:
+                key = (int(dx), int(dy))
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append(key)
+        return pairs
+
+    def output(self) -> list[MergeChainNodeGroup]:
+        first_input_group = self.input[0]
+
+        # ── 1. 加载头像模板与立绘 ──
+        avatar_img_path = self.avatar_template
+        if not avatar_img_path.exists():
+            raise ValueError(f"头像文件不存在: {avatar_img_path}")
+        avatar_img_arr = parse_layer_image(avatar_img_path)
+        if avatar_img_arr is None:
+            raise ValueError(f"头像解析失败: {avatar_img_path}")
+
+        target_image_arr = cv2.imdecode(
+            np.fromfile(self.target_image_path, dtype=np.uint8), cv2.IMREAD_COLOR
+        )
+        target_image_arr = cv2.cvtColor(target_image_arr, cv2.COLOR_BGR2RGB)
+        th, tw = target_image_arr.shape[:2]
+
+        # ── 2. 调用 detect_cv.detect_avatar 做带掩码的多尺度模板匹配 ──
+        results = detect_avatar(
+            target=self.target_image_path,
+            template=avatar_img_path,
+            mask=self.avatar_mask,
+            min_scale=self.min_scale,
+            max_scale=self.max_scale,
+            steps=self.steps,
+        )
+        if not results:
+            raise ValueError("头像检测未返回任何匹配结果")
+
+        best = results[0]
+
+        # ── 3. 读取前景图与掩码（所有偏移组合共用） ──
+        fg_arr = parse_layer_image(self.support_frame_foreground)
+        if fg_arr is None:
+            raise ValueError(f"助战框前景图解析失败: {self.support_frame_foreground}")
+        fg_h, fg_w = fg_arr.shape[:2]
+
+        mask_img = Image.open(self.support_frame_mask).convert('L')
+        if mask_img.size != (fg_w, fg_h):
+            mask_img = mask_img.resize((fg_w, fg_h))
+
+        fg_img = Image.fromarray(fg_arr)
+        if fg_img.mode != 'RGBA':
+            fg_img = fg_img.convert('RGBA')
+
+        # 检测区域中心（基准位置）
+        bx1, by1, bx2, by2 = best['rect']
+        bcx = (bx1 + bx2) / 2
+        bcy = (by1 + by2) / 2
+
+        # ── 4. 生成偏移对并逐个裁剪合成 ──
+        offset_pairs = self._build_offset_pairs()
+        print(f"偏移组合数: {len(offset_pairs)}，检测区域: {best['rect']}")
+
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        target_stem = self.target_image_path.stem
+        layers: list[LayerSpec] = []
+
+        for index, (dx, dy) in enumerate(offset_pairs):
+            # 基准位置 + 偏移
+            cx = bcx + dx
+            cy = bcy + dy
+            x1 = int(cx - fg_w / 2)
+            y1 = int(cy - fg_h / 2)
+
+            # 超出立绘范围则抛弃该偏移（避免裁剪出黑色块）
+            if x1 < 0 or y1 < 0 or x1 + fg_w > tw or y1 + fg_h > th:
+                print(f"  偏移({dx:+d}, {dy:+d}) 超出立绘范围，跳过")
+                continue
+
+            # 裁剪区域已在立绘范围内，直接裁剪
+            clip_canvas = Image.new('RGBA', (fg_w, fg_h), (0, 0, 0, 0))
+            clip_arr = target_image_arr[y1:y1 + fg_h, x1:x1 + fg_w]
+            clip_img = Image.fromarray(clip_arr).convert('RGBA')
+            clip_canvas.paste(clip_img, (0, 0), clip_img)
+
+            # 与掩码合成 → 中间有像素、四周透明的临时图
+            clip_canvas.putalpha(mask_img.copy())
+
+            # 临时图盖在前景图上
+            result = Image.alpha_composite(fg_img, clip_canvas)
+
+            # 保存
+            # suffix = f"_v{dy}_h{dx}" if (dx, dy) != (0, 0) else ""
+            suffix = f"{index}"
+            out_path = self.out_dir / f"{target_stem}_support_frame{suffix}.png"
+            result.save(out_path)
+            print(f"  偏移({dx:+d}, {dy:+d}) → {out_path.name}")
+            layers.append({'template': out_path})
+
+        return [MergeChainNodeGroup(name='default', layers=layers)]
+
+
 class ExpandClipChainNode(MergeChainNode):
     def __init__(self, input: list[MergeChainNodeGroup], out_dir: PathLike, frame_paths: list[dict]):
         super().__init__(input)

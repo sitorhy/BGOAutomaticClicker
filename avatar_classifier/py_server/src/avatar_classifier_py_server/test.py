@@ -17,6 +17,7 @@ from .merge_chain import (
     StarsChainNode,
     ClassChainNode,
     NormalizeChainNode,
+    SupportFrameChainNode,
 )
 
 """
@@ -310,6 +311,28 @@ class TestUnit(unittest.TestCase):
             background_color=(128, 128, 128, 255),
         ).output()
         
+    def test_support_frame_composite(self):
+        """助战框合成流水线：从立绘检测头像 → 扩充到助战框尺寸 → 掩码裁剪 → 叠加边框前景"""
+        output_dir = Path(__file__).parent.parent.parent / 'temp'
+
+        SupportFrameChainNode(
+            input=[
+                MergeChainNodeGroup(
+                    name='default',
+                    layers=[]
+                )
+            ],
+            target_image_path=RES_DIR / 'test' / '哈贝特洛特(Pretender)一破.png',
+            avatar_template=RES_DIR / 'test' / 'Servant481.jpg',
+            avatar_mask=RES_DIR / 'mask' / 'mooncell头像探测掩码.jpg',
+            support_frame_mask=RES_DIR / 'mask' / '助战框掩码.png',
+            support_frame_foreground=RES_DIR / 'foreground' / '金助战框.png',
+            out_dir=output_dir,
+            vertical_offset=(-100, 50),
+            horizontal_offset=(0, 0),
+            offset_steps=5,
+        ).output()
+
     def test_background_chain_node(self):
         out_dir = Path(__file__).parent.parent.parent / 'temp'
         BackgroundChainNode(
