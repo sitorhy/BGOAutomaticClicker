@@ -228,7 +228,7 @@ class TestUnit(unittest.TestCase):
         # cv2.imshow('img_target', target_img)
         # cv2.waitKey(0)
         # v2.destroyAllWindows()
-        target_img_clip = target_img[133:288, 183:333]
+        target_img_clip = target_img[126:286, 186:346]
         # cv2.imshow('img_target_clip', target_img_clip)
         # cv2.waitKey(0)
         # cv2.destroyAllWindows()
@@ -239,7 +239,7 @@ class TestUnit(unittest.TestCase):
 
         # 创建背景图，用黑色底填充，大小与裁剪区域相同
         blank_img = Image.new(
-            'RGBA', (150, 155), (0, 0, 0, 255))
+            'RGBA', (160, 160), (0, 0, 0, 0))
         # blank_img.show()
 
         # 验证数据
@@ -489,7 +489,7 @@ def test_merge_layers():
             target_image_path=RES_DIR / 'test' / '哈贝特洛特(Pretender)一破.png',
             clip_mask=RES_DIR / 'mask' / 'BGO头像裁剪掩码.png',
             out_dir=output_dir,
-            output_size=(150, 155),
+            output_size=(160, 160),
         ).output()
 
     if run_steps['expand']:
