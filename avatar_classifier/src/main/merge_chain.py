@@ -1,6 +1,5 @@
 import json
 import os
-from os import PathLike
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
@@ -21,19 +20,19 @@ class LayerSpec(TypedDict, total=False):
     """单个图层/标记图片的描述（对应注释中的 b1、l1、c1、s1、f1 等序列元素）"""
     # 唯一标识，动态修改配置时可能会用到
     name: str
-    # 模板图片路径（str | PathLike）或已加载好的 ndarray
-    template: PathLike | str | np.ndarray
+    # 模板图片路径（str | Path）或已加载好的 ndarray
+    template: Path | str | np.ndarray
     # 裁剪掩码图片路径，灰度图，合成前通过 putalpha 转为透明通道
-    mask: NotRequired[PathLike | str]
+    mask: NotRequired[Path | str]
     # 尺寸不适应于画布时的缩放策略: contain / cover / fill, None 表示居中放置
     fit: NotRequired[FitMode | None]
 
 
-def parse_layer_image(template: PathLike | str | np.ndarray | None) -> np.ndarray | None:
+def parse_layer_image(template: Path | str | np.ndarray | None) -> np.ndarray | None:
     if isinstance(template, np.ndarray):
         # 调用方传入的 ndarray 应已是 RGB(A) 格式，不做通道转换
         return template
-    if isinstance(template, str | PathLike):
+    if isinstance(template, str | Path):
         nd_arr = cv2.imdecode(np.fromfile(
             template, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
         # cv2.imdecode 返回 BGR(A) 通道顺序，需转为 RGB(A) 才能被 PIL 正确解读
@@ -147,14 +146,14 @@ class BackgroundChainNode(MergeChainNode):
     """
     将立绘与指定背景图按融合为新新训练图，
     alpha 为整体透明度，取值 0.0 - 1.0, 默认 0.8
-    target_image_path: PathLike, 立绘图片路径
+    target_image_path: Path, 立绘图片路径
     input: list[MergeChainNodeGroup], 指定 template 为图片路径, 分组只有一个
     output_size: tuple[int, int], 图片大小，背景会被拉伸至 output_size，立绘会居中放置
     """
     # 背景图落盘路径，构造对象时指定（输入输出解耦）
-    out_dir: PathLike
+    out_dir: Path
 
-    def __init__(self, input: list[MergeChainNodeGroup], out_dir: PathLike, target_image_path: PathLike, output_size: tuple[int, int],  alpha: int = int(0.8 * 255)):
+    def __init__(self, input: list[MergeChainNodeGroup], out_dir: Path, target_image_path: Path, output_size: tuple[int, int],  alpha: float = 0.95):
         super().__init__(input)
         self.out_dir = Path(out_dir)
         self.alpha = alpha
@@ -257,7 +256,7 @@ class AvatarClipChainNode(MergeChainNode):
     max_scale = 1.5
     
 
-    def __init__(self, input: list[MergeChainNodeGroup], target_image_path: PathLike, clip_mask: PathLike, out_dir: PathLike, output_size: tuple[int, int]):
+    def __init__(self, input: list[MergeChainNodeGroup], target_image_path: Path, clip_mask: Path, out_dir: Path, output_size: tuple[int, int]):
         super().__init__(input)
         # 立绘（待探测目标）路径，构造时指定
         self.target_image_path = Path(target_image_path)
@@ -419,12 +418,12 @@ class SupportFrameChainNode(MergeChainNode):
     def __init__(
         self,
         input: list[MergeChainNodeGroup],
-        target_image_path: PathLike,
-        avatar_template: PathLike,
-        avatar_mask: PathLike,
-        support_frame_mask: PathLike,
-        support_frame_foreground: PathLike,
-        out_dir: PathLike,
+        target_image_path: Path,
+        avatar_template: Path,
+        avatar_mask: Path,
+        support_frame_mask: Path,
+        support_frame_foreground: Path,
+        out_dir: Path,
         vertical_offset: tuple[int, int] = (0, 0),
         horizontal_offset: tuple[int, int] = (0, 0),
         offset_steps: int = 1,
@@ -565,7 +564,7 @@ class SupportFrameChainNode(MergeChainNode):
 
 
 class ExpandClipChainNode(MergeChainNode):
-    def __init__(self, input: list[MergeChainNodeGroup], out_dir: PathLike, frame_paths: list[dict]):
+    def __init__(self, input: list[MergeChainNodeGroup], out_dir: Path, frame_paths: list[dict]):
         super().__init__(input)
         # 分组图片输出根目录，构造时指定
         self.out_dir = Path(out_dir)
@@ -606,7 +605,7 @@ class ExpandClipChainNode(MergeChainNode):
 
 
 class LabelChainNode(MergeChainNode):
-    def __init__(self, input: list[MergeChainNodeGroup], out_dir: PathLike, label_paths: list[dict], delete_old: bool = False):
+    def __init__(self, input: list[MergeChainNodeGroup], out_dir: Path, label_paths: list[dict], delete_old: bool = False):
         super().__init__(input)
         # 分组图片输出根目录，构造时指定
         self.out_dir = Path(out_dir)
@@ -658,7 +657,7 @@ class LabelChainNode(MergeChainNode):
 
 
 class StatusChainNode(MergeChainNode):
-    def __init__(self, input: list[MergeChainNodeGroup], out_dir: PathLike, status_paths: list[dict], delete_old: bool = False):
+    def __init__(self, input: list[MergeChainNodeGroup], out_dir: Path, status_paths: list[dict], delete_old: bool = False):
         super().__init__(input)
         # 分组图片输出根目录，构造时指定
         self.out_dir = Path(out_dir)
@@ -714,7 +713,7 @@ class StatusChainNode(MergeChainNode):
 
 
 class StarsChainNode(MergeChainNode):
-    def __init__(self, input: list[MergeChainNodeGroup], out_dir: PathLike, stars_paths: list[dict], delete_old: bool = False):
+    def __init__(self, input: list[MergeChainNodeGroup], out_dir: Path, stars_paths: list[dict], delete_old: bool = False):
         super().__init__(input)
         # 分组图片输出根目录，构造时指定
         self.out_dir = Path(out_dir)
@@ -770,7 +769,7 @@ class StarsChainNode(MergeChainNode):
 
 
 class ClassChainNode(MergeChainNode):
-    def __init__(self, input: list[MergeChainNodeGroup], out_dir: PathLike, class_paths: list[dict], delete_old: bool = False):
+    def __init__(self, input: list[MergeChainNodeGroup], out_dir: Path, class_paths: list[dict], delete_old: bool = False):
         super().__init__(input)
         # 分组图片输出根目录，构造时指定
         self.out_dir = Path(out_dir)
@@ -843,7 +842,7 @@ class ClassifyChainNode(MergeChainNode):
         (512, 724): 'character',
     }
 
-    def __init__(self, input_dir: PathLike):
+    def __init__(self, input_dir: Path):
         super().__init__(input=[])
         self.input_dir = Path(input_dir)
 
@@ -890,7 +889,7 @@ class ClassifyChainNode(MergeChainNode):
 
 
 class NormalizeChainNode(MergeChainNode):
-    def __init__(self, input: list[MergeChainNodeGroup], out_dir: PathLike, output_size: tuple[int, int], background_color: tuple[int, int, int, int] = (0, 0, 0, 255), delete_old: bool = False):
+    def __init__(self, input: list[MergeChainNodeGroup], out_dir: Path, output_size: tuple[int, int], background_color: tuple[int, int, int, int] = (0, 0, 0, 255), delete_old: bool = False):
         super().__init__(input)
         # 分组图片输出根目录，构造时指定
         self.out_dir = Path(out_dir)
