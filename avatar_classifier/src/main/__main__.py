@@ -1,5 +1,6 @@
 import csv
 import random
+import shutil
 import warnings
 from dataclasses import dataclass
 from os import listdir
@@ -7,9 +8,11 @@ from pathlib import Path
 
 from PIL import Image
 
+from main.detect_cv import detect_face, detect_anime_face
 from main.merge_chain import ClassifyChainNode, BackgroundChainNode, MergeChainNodeGroup
 from .config import RES_DIR, ROOT_DIR, BG_DIR, TEMP_DIR
 
+OUT_PUT_DIR = TEMP_DIR
 
 @dataclass
 class Servant:
@@ -77,14 +80,14 @@ def main():
                 img_list: list[Path] = [layer["template"] for layer in c.layers]
 
                 match group:
-                    case 'status':
+                    # case 'status':
                         # 再临阶段
-                        process_status_img_list(s, img_list)
-                        break
-                    case 'avatar':
+                    #    process_status_img_list(s, img_list)
+                    #    break
+                    # case 'avatar':
                         # wiki的头像图，用于立绘的头像模板匹配
-                        process_avatar_img_list(s, img_list)
-                        break
+                    #    process_avatar_img_list(s, img_list)
+                    #    break
                     case 'character':
                         process_character_img_list(s, img_list)
                         break
@@ -106,7 +109,7 @@ def process_status_img_list(s: Servant, img_list: list[Path]):
 
     # 单例测试
     # bg_img_list = listdir(BG_DIR)[-6:-5]
-    bg_img_list = listdir(BG_DIR)[0:5]
+    bg_img_list = listdir(BG_DIR)
 
     bg_cropped_list = []
     for index, bg in enumerate(bg_img_list):
@@ -122,7 +125,7 @@ def process_status_img_list(s: Servant, img_list: list[Path]):
         print(f"裁剪位置: ({x}, {y}), 裁剪后尺寸: {cropped_bg.size}")
 
         # 输入使用Path类型，存到临时文件夹，省点内存
-        tmp_cropped_bg_path = TEMP_DIR / f"{s.id}_bg_{index}.png"
+        tmp_cropped_bg_path = OUT_PUT_DIR / f"{s.id}_bg_{index}.png"
         cropped_bg.convert("RGBA").save(tmp_cropped_bg_path)
         print(f"保存背景图 {tmp_cropped_bg_path}")
 
@@ -142,7 +145,7 @@ def process_status_img_list(s: Servant, img_list: list[Path]):
             ],
             alpha=0.85,
             target_image_path=target_image_path,
-            out_dir=TEMP_DIR,
+            out_dir=OUT_PUT_DIR,
             output_size=output_size,
         ).output()
 
@@ -152,11 +155,17 @@ def process_status_img_list(s: Servant, img_list: list[Path]):
 
 
 def process_avatar_img_list(s: Servant, img_list: list[Path]):
-    print(len(img_list))
+    # wiki 的头像直接复制即可
+    for avatar in img_list:
+        shutil.copy(avatar, OUT_PUT_DIR)
 
 
 def process_character_img_list(s: Servant, img_list: list[Path]):
-    print(len(img_list))
+    # 满破、灵衣等没有提供头像图，实际上头像合成还要依赖 detect_face
+    for character_img in img_list:
+        print(f"检测：{character_img.name}")
+        results = detect_anime_face(character_img)
+        print(results)
 
 
 if __name__ == '__main__':

@@ -8,10 +8,12 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "numpy==2.5.4",
-    "pillow>=12.3.0",
+    "pillow==13.0.0",
     "scipy>=1.16.0",
-    "opencv-python>=5.0.0.93",
-    "scipy-stubs~=1.18.1"
+    "scipy-stubs~=1.18.1",
+    "opencv-contrib-python>=5.0.0.93",
+    "fastapi[standard]==0.144.0",
+    "uvicorn>=0.54.0",
 ]
 
 [tool.uv]

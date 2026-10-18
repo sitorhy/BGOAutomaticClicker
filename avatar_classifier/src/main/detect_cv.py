@@ -17,6 +17,9 @@ from .config import RES_DIR
 # YuNet 人脸检测模型默认路径（OpenCV Zoo: face_detection_yunet_2023mar.onnx）
 DEFAULT_FACE_MODEL = RES_DIR / "model" / "face_detection_yunet_2023mar.onnx"
 
+# 动漫人脸 Haar 级联分类器（nagadomi/lbpcascade_animeface）
+DEFAULT_ANIME_CASCADE = RES_DIR / "model" / "lbpcascade_animeface.xml"
+
 
 def _imread_unicode(path: str | Path, flags: int) -> np.ndarray:
     """读取图片，兼容 Windows 中文路径。
@@ -184,10 +187,19 @@ def detect_face(
     img = _imread_unicode(image, cv2.IMREAD_COLOR)
     h, w = img.shape[:2]
 
+    # 抑制新版 DNN 图引擎的 setPreferableTarget 警告（不影响功能）
+    # getLogLevel/setLogLevel 仅在 opencv-python 基础包中可用，contrib 版无此 API
+    _suppress_warn = hasattr(cv2, "setLogLevel")
+    if _suppress_warn:
+        log_level = cv2.getLogLevel()
+        cv2.setLogLevel(0)
+
     # 创建检测器并设定输入尺寸（与待检测图像一致）
     detector = cv2.FaceDetectorYN.create(
         str(model), "", (w, h), score_threshold, nms_threshold, top_k,
     )
+    if _suppress_warn:
+        cv2.setLogLevel(log_level)  # 恢复原日志级别
     detector.setInputSize((w, h))
 
     # detect 返回 (retval, faces)，faces 为 N×15；未检到人脸时为空
@@ -220,5 +232,77 @@ def detect_face(
     print(f"\n🙂 共检测到 {len(results)} 张人脸")
     for i, r in enumerate(results):
         print(f"  #{i} 置信度={r['score']:.3f} 区域={r['rect']}")
+
+    return results
+
+
+def detect_anime_face(
+        image: str | Path,
+        cascade_path: str | Path | None = None,
+        scale_factor: float = 1.1,
+        min_neighbors: int = 2,
+        min_size: tuple[int, int] = (24, 24),
+) -> list[dict]:
+    """使用 Haar 级联分类器检测动漫人脸（lbpcascade_animeface）。
+
+    基于 nagadomi/lbpcascade_animeface 项目，专为日系动漫人脸训练，
+    对色偏、遮挡、非正面角度等场景比 YuNet（真人模型）更鲁棒。
+    使用 OpenCV CascadeClassifier.detectMultiScale 实现多尺度滑动窗口检测。
+
+    Args:
+        image: 待检测图像路径（自动兼容中文路径）
+        cascade_path: 级联分类器 XML 路径，None 时使用 DEFAULT_ANIME_CASCADE
+        scale_factor: 每次缩放比例，越小越精细但越慢，默认 1.1
+        min_neighbors: 最少邻居数（候选框周围需有至少 N 个重叠框才保留），
+                       越大越严格、误检越少但漏检越多，默认 2
+        min_size: 最小检测尺寸 (宽, 高)，小于该尺寸的候选框被过滤，默认 (24, 24)
+
+    Returns:
+        检测到的动漫人脸列表，按面积降序排列。每项包含:
+            score  - 固定为 1.0（Haar 级联不输出置信度）
+            x, y   - 人脸框左上角坐标
+            w, h   - 人脸框宽高
+            rect   - (x, y, x+w, y+h) 便捷元组
+    """
+    cascade_file = Path(cascade_path) if cascade_path is not None else DEFAULT_ANIME_CASCADE
+    if not cascade_file.exists():
+        raise FileNotFoundError(
+            f"未找到动漫人脸级联分类器: {cascade_file}\n"
+            f"请运行 res/model/download_animeface_cascade.py 下载 lbpcascade_animeface.xml，"
+            f"或通过 cascade_path 参数指定。"
+        )
+
+    # CascadeClassifier 需要灰度图
+    img = _imread_unicode(image, cv2.IMREAD_COLOR)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # CLAHE 自适应直方图均衡化：分块增强局部对比度，比全局 equalizeHist
+    # 更能保留细节，对强色偏 / 逆光 / 低对比度图尤其有效
+    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(16, 16))
+    gray = clahe.apply(gray)
+
+    cascade = cv2.CascadeClassifier(str(cascade_file))
+    faces = cascade.detectMultiScale(
+        gray,
+        scaleFactor=scale_factor,
+        minNeighbors=min_neighbors,
+        minSize=min_size,
+    )
+
+    results: list[dict] = []
+    for (x, y, w, h) in faces:
+        results.append({
+            "score": 1.0,
+            "x": int(x),
+            "y": int(y),
+            "w": int(w),
+            "h": int(h),
+            "rect": (int(x), int(y), int(x + w), int(y + h)),
+        })
+
+    # 按面积降序
+    results.sort(key=lambda r: r["w"] * r["h"], reverse=True)
+    print(f"\n🎨 共检测到 {len(results)} 张动漫人脸")
+    for i, r in enumerate(results):
+        print(f"  #{i} 区域={r['rect']}  尺寸={r['w']}×{r['h']}")
 
     return results
