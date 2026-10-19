@@ -152,8 +152,14 @@ export function useStore() {
 
     async function saveRange() {
         if (state.selectedServantId == null || !state.selectedImage || !state.range) return
-        // TODO: 调用后端接口提交范围
-        // 保存后重新拉取该从者的头像数据
+        const key = `${state.selectedServantId}/${state.selectedImage}`
+        const existing = state.avatarMap[key]
+        await ApiManager.servantsService.createOrUpdateServantAvatar({
+            id: existing?.id,
+            servant_id: state.selectedServantId,
+            file: state.selectedImage,
+            ...state.range,
+        })
         const avatars = await fetchAvatars(state.selectedServantId)
         const markedFiles = new Set(avatars.map((a) => a.file))
         const images = imageCache[state.selectedServantId] ?? []

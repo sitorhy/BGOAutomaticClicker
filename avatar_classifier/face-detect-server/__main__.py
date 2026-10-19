@@ -41,7 +41,8 @@ async def serve_res(path: str, type: str = 'character'):
             continue
         img = Image.open(entry)
         if type == 'avatar':
-            if img.size[0] == 132 and img.size[1] == 144:
+            # 筛选头像
+            if img.size[0] == 132 and img.size[1] == 144 or img.size[0] == 256 and img.size[1] == 256:
                 entries.append({
                     "name": entry.name,
                     "type": "directory" if entry.is_dir() else "file",
@@ -157,22 +158,40 @@ async def delete_servants(request: Request):
 
 
 @app.post("/api/avatars")
-async def add_avatar(request: Request):
-    """新增 avatar 记录。请求体: {"servant_id": int, "file": str, "left": int, "top": int, "right": int, "bottom": int}"""
+async def save_avatar(request: Request):
+    """保存 avatar 记录。传 id 则更新，否则新增。
+    请求体: {"servant_id": int, "file": str, "left": int, "top": int, "right": int, "bottom": int, "id"?: int}"""
     body = await request.json()
-    required = ("servant_id", "file", "left", "top", "right", "bottom")
+    required = ("file", "left", "top", "right", "bottom")
     for key in required:
         if key not in body:
             raise HTTPException(status_code=400, detail=f"Missing field: {key}")
-    avatar_id = db.add_avatar(
-        servant_id=body["servant_id"],
-        file=body["file"],
-        left=body["left"],
-        top=body["top"],
-        right=body["right"],
-        bottom=body["bottom"],
-    )
-    return {"id": avatar_id}
+
+    avatar_id = body.get("id")
+    if avatar_id is not None:
+        # 更新模式
+        db.save_avatar(
+            avatar_id=avatar_id,
+            file=body["file"],
+            left=body["left"],
+            top=body["top"],
+            right=body["right"],
+            bottom=body["bottom"],
+        )
+        return {"id": avatar_id, "action": "updated"}
+    else:
+        # 新增模式
+        if "servant_id" not in body:
+            raise HTTPException(status_code=400, detail="Missing field: servant_id")
+        new_id = db.save_avatar(
+            servant_id=body["servant_id"],
+            file=body["file"],
+            left=body["left"],
+            top=body["top"],
+            right=body["right"],
+            bottom=body["bottom"],
+        )
+        return {"id": new_id, "action": "created"}
 
 
 @app.get("/api/avatars")

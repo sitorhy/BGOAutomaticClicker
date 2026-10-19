@@ -172,16 +172,25 @@ class ServantDB:
 
     # ── avatar 表操作 ────────────────────────────────────
 
-    def add_avatar(self, servant_id: int, file: str,
-                   left: int, top: int, right: int, bottom: int) -> int:
-        """新增一条 avatar 记录，返回新记录的 id。"""
-        cur = self.conn.execute(
-            "INSERT INTO avatar (servant_id, file, left, top, right, bottom) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (servant_id, file, left, top, right, bottom),
-        )
-        self.conn.commit()
-        return cur.lastrowid
+    def save_avatar(self, file: str, left: int, top: int, right: int, bottom: int,
+                    servant_id: int | None = None, avatar_id: int | None = None) -> int:
+        """保存 avatar 记录。传 avatar_id 则更新，否则新增。返回记录 id。"""
+        if avatar_id is not None:
+            self.conn.execute(
+                "UPDATE avatar SET file = ?, left = ?, top = ?, right = ?, bottom = ? "
+                "WHERE id = ?",
+                (file, left, top, right, bottom, avatar_id),
+            )
+            self.conn.commit()
+            return avatar_id
+        else:
+            cur = self.conn.execute(
+                "INSERT INTO avatar (servant_id, file, left, top, right, bottom) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (servant_id, file, left, top, right, bottom),
+            )
+            self.conn.commit()
+            return cur.lastrowid
 
     def get_avatars_by_servant(self, servant_id: int) -> list[dict]:
         """获取某个从者的全部 avatar 记录。"""

@@ -53,7 +53,7 @@ onMounted(() => {
 }
 
 .panel-left {
-  width: 300px;
+  width: 450px;
   min-width: 220px;
   overflow: hidden;
 }
@@ -65,7 +65,7 @@ onMounted(() => {
 }
 
 .panel-right {
-  width: 300px;
+  width: 400px;
   min-width: 200px;
   overflow: hidden;
 }

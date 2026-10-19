@@ -106,6 +106,33 @@ export class ServantsService extends Service {
             avatar
         });
     }
+
+    @RequestMapping("/avatars/{avatar_id}", "DELETE")
+    @PathVariables()
+    deleteServantAvatar(avatar_id: number) {
+        return Expect<{ deleted: number }>({avatar_id});
+    }
+
+
+    @RequestMapping("/avatars", "POST")
+    @RequestBody()
+    createOrUpdateServantAvatar(body: {
+        id?: number; // 更新传id，不传为创建
+        servant_id: number;
+        file: string;
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+    }) {
+        return Expect<{ id: number, action: string }>({body});
+    }
+
+    @RequestMapping("avatars/{avatar_id}", "GET")
+    @PathVariables()
+    getServantAvatar(avatar_id: number) {
+        return Expect<ServantAvatar>({avatar_id});
+    }
 }
 
 export const ApiManager = {
