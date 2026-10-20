@@ -32,12 +32,13 @@ function onFieldUpdate(field: keyof BBoxRange, val: number | null) {
 
 function normalize() {
   if (!range.value) return
+  const centerX = (range.value.left + range.value.right) / 2
+  const centerY = (range.value.top + range.value.bottom) / 2
   store.updateRange({
-    ...range.value,
-    // right: range.value.left + 132,
-    // bottom: range.value.top + 144,
-    right: range.value.left + 165,
-    bottom: range.value.top + 180,
+    left: Math.round(centerX - 82.5),
+    top: Math.round(centerY - 90),
+    right: Math.round(centerX + 82.5),
+    bottom: Math.round(centerY + 90),
   })
 }
 </script>
