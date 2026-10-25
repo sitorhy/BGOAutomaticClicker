@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import {computed, ref} from 'vue'
-import {NButton, NIcon, useMessage} from 'naive-ui'
+import {NButton, NIcon, NPopconfirm, useMessage} from 'naive-ui'
 import {CheckCircleFilled} from '@vicons/material'
+import {ApiManager} from '../api'
 import {useStore} from '../store/useStore'
 import DetectDialog from './DetectDialog.vue'
 
@@ -19,6 +20,26 @@ const dialogIllustration = ref('')
 function isMarked(name: string): boolean {
   if (selectedServantId.value == null) return false
   return `${selectedServantId.value}/${name}` in store.state.avatarMap
+}
+
+function getAvatarId(name: string): number | undefined {
+  if (selectedServantId.value == null) return undefined
+  return store.state.avatarMap[`${selectedServantId.value}/${name}`]?.id
+}
+
+async function onDelete(name: string) {
+  const avatarId = getAvatarId(name)
+  if (avatarId == null || selectedServantId.value == null) return
+  try {
+    await ApiManager.servantsService.deleteServantAvatar(avatarId)
+    message.success('已删除')
+    await store.refreshServantAvatars(selectedServantId.value)
+    if (selectedImage.value === name) {
+      store.selectImage(name)
+    }
+  } catch (err: any) {
+    message.error(`删除失败：${err.message ?? err}`)
+  }
 }
 
 function onImageClick(name: string) {
@@ -81,6 +102,12 @@ function onDetectResult(result: { illustration: string; avatar: string | null; r
             <NButton size="tiny" type="primary" :disabled="!currentRange" @click.stop="onSave">保存</NButton>
           </template>
           <NButton size="tiny" type="info" @click.stop="onDetect(img)">探测</NButton>
+          <NPopconfirm v-if="isMarked(img)" @positive-click.stop="onDelete(img)">
+            <template #trigger>
+              <NButton size="tiny" type="error" @click.stop>删除</NButton>
+            </template>
+            确认删除该头像标记？
+          </NPopconfirm>
         </span>
       </div>
       <div v-if="images.length === 0" class="image-paths-empty">
@@ -163,7 +190,7 @@ function onDetectResult(result: { illustration: string; avatar: string | null; r
 }
 
 .col-action {
-  width: 160px;
+  width: 210px;
   display: flex;
   gap: 4px;
   justify-content: center;

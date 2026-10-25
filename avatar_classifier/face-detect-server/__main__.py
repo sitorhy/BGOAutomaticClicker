@@ -118,6 +118,19 @@ async def get_servants_count():
     return {"count": db.count()}
 
 
+@app.put("/api/servants/{servant_id}")
+async def update_servant(servant_id: int, request: Request):
+    exist = db.get_by_id(servant_id)
+    if exist is None:
+        raise HTTPException(status_code=404, detail=f"Servant {servant_id} not found")
+    body = await request.json()
+    for key, value in body.items():
+        exist[key] = value
+    exist["id"] = servant_id
+    db._upsert([exist])
+    return {"updated": 1}
+
+
 @app.get("/api/servants/{servant_id}")
 async def get_servant(servant_id: int):
     """按 id 查询单条从者记录。"""
@@ -229,6 +242,9 @@ async def delete_avatars_by_servant(servant_id: int):
     """删除某个从者的全部 avatar 记录。"""
     n = db.delete_avatars_by_servant(servant_id)
     return {"deleted": n}
+
+async def revoke_servant_avatars(servant_id: int):
+    """ 屏蔽从者，不录入训练集，一般用于不可获取的从者和 """
 
 
 # ── 头像范围探测 ─────────────────────────────────────────

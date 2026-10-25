@@ -221,3 +221,5 @@ __marimo__/
 /src/temp/
 temp
 temp/
+/res/assets
+.idea/

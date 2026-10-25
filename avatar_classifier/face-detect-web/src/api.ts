@@ -73,6 +73,13 @@ export class ServantsService extends Service {
         return Expect<Servant[]>({});
     }
 
+    @RequestMapping("/servants/{servant_id}", "PUT")
+    @PathVariables()
+    @RequestBody()
+    updateServant(servant_id: number, body: Servant) {
+        return Expect<{ updated: number }>({body, servant_id});
+    }
+
     @RequestMapping("/avatars", "GET")
     listAllServantAvatars() {
         return Expect<ServantAvatar[]>({});

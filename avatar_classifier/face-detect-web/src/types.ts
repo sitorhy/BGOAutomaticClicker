@@ -14,6 +14,7 @@ export interface Servant {
   get: string
   atk_max: number
   hp_max: number
+  revoke: number
 }
 
 export interface ServantAvatar {

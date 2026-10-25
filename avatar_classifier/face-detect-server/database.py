@@ -9,25 +9,30 @@ from typing import Sequence
 
 DB_PATH = Path(__file__).resolve().parent.parent / "servants.db"
 
-CREATE_TABLE_SQL = """\
-CREATE TABLE IF NOT EXISTS servants (
-    id          INTEGER PRIMARY KEY,
-    name_cn     TEXT NOT NULL,
-    name_jp     TEXT NOT NULL,
-    name_en     TEXT NOT NULL,
-    page_url    TEXT,
-    avatar      TEXT,
-    card_rarity TEXT,
-    servant_class   TEXT,
-    np_color    TEXT,
-    np_type     TEXT,
-    cards       TEXT,
-    faction     TEXT,
-    get         TEXT,
-    atk_max     INTEGER,
-    hp_max      INTEGER
+SERVANTS_TABLE_COLUMNS = [
+    ("id", "INTEGER PRIMARY KEY"),
+    ("name_cn", "TEXT NOT NULL"),
+    ("name_jp", "TEXT NOT NULL"),
+    ("name_en", "TEXT NOT NULL"),
+    ("page_url", "TEXT"),
+    ("avatar", "TEXT"),
+    ("card_rarity", "TEXT"),
+    ("servant_class", "TEXT"),
+    ("np_color", "TEXT"),
+    ("np_type", "TEXT"),
+    ("cards", "TEXT"),
+    ("faction", "TEXT"),
+    ("get", "TEXT"),
+    ("atk_max", "INTEGER"),
+    ("hp_max", "INTEGER"),
+    ("revoke", "INTEGER DEFAULT 0"),
+]
+
+CREATE_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS servants ("
+    + ", ".join(f"{name} {typ}" for name, typ in SERVANTS_TABLE_COLUMNS)
+    + ")"
 )
-"""
 
 CREATE_AVATAR_TABLE_SQL = """\
 CREATE TABLE IF NOT EXISTS avatar (
@@ -41,16 +46,12 @@ CREATE TABLE IF NOT EXISTS avatar (
 )
 """
 
-INSERT_SQL = """\
-INSERT OR REPLACE INTO servants
-    (id, name_cn, name_jp, name_en, page_url, avatar,
-     card_rarity, servant_class, np_color, np_type,
-     cards, faction, get, atk_max, hp_max)
-VALUES
-    (:id, :name_cn, :name_jp, :name_en, :page_url, :avatar,
-     :card_rarity, :servant_class, :np_color, :np_type,
-     :cards, :faction, :get, :atk_max, :hp_max)
-"""
+SERVANT_COLUMNS = [n for n, _ in SERVANTS_TABLE_COLUMNS if n != "id"]
+_ALL_COLS = ", ".join(SERVANT_COLUMNS)
+_PLACEHOLDERS = ", ".join(f":{c}" for c in SERVANT_COLUMNS)
+INSERT_SQL = (
+    f"INSERT OR REPLACE INTO servants (id, {_ALL_COLS}) VALUES (:id, {_PLACEHOLDERS})"
+)
 
 
 def _normalize_row(row: dict) -> dict:

@@ -112,6 +112,13 @@ export function useStore() {
         state.images = []
     }
 
+    function updateServantRevoke(servantId: number, revoke: number) {
+        const idx = state.servants.findIndex((s) => s.id === servantId)
+        if (idx >= 0) {
+            state.servants[idx] = {...state.servants[idx], revoke}
+        }
+    }
+
     async function loadImages(dirName: string) {
         try {
             const names = await fetchImages(Number(dirName))
@@ -147,7 +154,27 @@ export function useStore() {
     }
 
     function createNewRange() {
-        state.range = {left: 0, top: 0, right: 100, bottom: 100}
+        state.range = {left: 0, top: 0, right: 132, bottom: 144}
+    }
+
+    async function refreshServantAvatars(servantId: number) {
+        const avatars = await fetchAvatars(servantId)
+        const markedFiles = new Set(avatars.map((a) => a.file))
+        const images = imageCache[servantId] ?? []
+        const markedCount = images.filter((name) => markedFiles.has(name)).length
+        for (const key of Object.keys(state.avatarMap)) {
+            if (key.startsWith(`${servantId}/`)) {
+                delete state.avatarMap[key]
+            }
+        }
+        for (const avatar of avatars) {
+            state.avatarMap[`${avatar.servant_id}/${avatar.file}`] = avatar
+        }
+        state.stats[servantId] = {
+            imageCount: images.length,
+            markedCount,
+            step: 'idle',
+        }
     }
 
     async function saveRange() {
@@ -160,18 +187,7 @@ export function useStore() {
             file: state.selectedImage,
             ...state.range,
         })
-        const avatars = await fetchAvatars(state.selectedServantId)
-        const markedFiles = new Set(avatars.map((a) => a.file))
-        const images = imageCache[state.selectedServantId] ?? []
-        const markedCount = images.filter((name) => markedFiles.has(name)).length
-        for (const avatar of avatars) {
-            state.avatarMap[`${avatar.servant_id}/${avatar.file}`] = avatar
-        }
-        state.stats[state.selectedServantId] = {
-            imageCount: images.length,
-            markedCount,
-            step: 'idle',
-        }
+        await refreshServantAvatars(state.selectedServantId)
         selectImage(state.selectedImage)
     }
 
@@ -187,12 +203,14 @@ export function useStore() {
         state: readonly(state),
         init,
         selectServant,
+        updateServantRevoke,
         loadImages,
         selectImage,
         getImageUrl,
         updateRange,
         createNewRange,
         saveRange,
+        refreshServantAvatars,
         getStats,
         isQueueDone,
     }
