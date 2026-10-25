@@ -948,4 +948,3 @@ class NormalizeChainNode(MergeChainNode):
                         p.unlink()
 
         return groups
-                

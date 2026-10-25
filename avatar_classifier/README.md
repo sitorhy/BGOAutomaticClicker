@@ -2,7 +2,7 @@
 生成徽标前景图层命令
 ```shell
 uv run python -m main.png_to_classes res/徽标 --out-dir res/foreground
-un run python -m main.png_to_classes res/冠位徽标 --out-dir res/foreground
+uv run python -m main.png_to_classes res/冠位徽标 --out-dir res/foreground
 ```
 
 ## 前置工作简述（已执行）

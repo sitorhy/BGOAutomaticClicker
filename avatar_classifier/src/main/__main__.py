@@ -1,6 +1,7 @@
 import csv
 import random
 import shutil
+import sqlite3
 import warnings
 from dataclasses import dataclass
 from os import listdir
@@ -8,11 +9,13 @@ from pathlib import Path
 
 from PIL import Image
 
-from main.detect_cv import detect_face, detect_anime_face
-from main.merge_chain import ClassifyChainNode, BackgroundChainNode, MergeChainNodeGroup
-from .config import RES_DIR, ROOT_DIR, BG_DIR, TEMP_DIR
+from main.config import RES_DIR, ROOT_DIR, BG_DIR, TEMP_DIR
+from main.merge_chain import ClassifyChainNode, BackgroundChainNode, MergeChainNodeGroup, \
+    ExpandClipChainNode, LabelChainNode, StatusChainNode, StarsChainNode, ClassChainNode
 
-OUT_PUT_DIR = TEMP_DIR
+OUT_PUT_DIR = Path("I:\\temp")
+OUT_PUT_DIR.mkdir(exist_ok=True)
+
 
 @dataclass
 class Servant:
@@ -64,9 +67,9 @@ class Servant:
 def main():
     servants = Servant.from_csv()
 
-    #单例测试
-    #for s in servants[:1]:
-    for s in servants[:1]:
+    # 单例测试
+    # for s in servants[:1]:
+    for s in servants:
         servant_id = s.id
         servant_res_dir = RES_DIR / "assets" / str(servant_id)
         if servant_res_dir.exists():
@@ -80,14 +83,14 @@ def main():
                 img_list: list[Path] = [layer["template"] for layer in c.layers]
 
                 match group:
-                    # case 'status':
-                        # 再临阶段
-                    #    process_status_img_list(s, img_list)
-                    #    break
-                    # case 'avatar':
-                        # wiki的头像图，用于立绘的头像模板匹配
-                    #    process_avatar_img_list(s, img_list)
-                    #    break
+                    case 'status':
+                    # 再临阶段
+                        process_status_img_list(s, img_list)
+                        break
+                    case 'avatar':
+                    # wiki的头像图，用于立绘的头像模板匹配
+                       process_avatar_img_list(s, img_list)
+                       break
                     case 'character':
                         process_character_img_list(s, img_list)
                         break
@@ -131,6 +134,9 @@ def process_status_img_list(s: Servant, img_list: list[Path]):
 
         bg_cropped_list.append(tmp_cropped_bg_path)
 
+    output_dir = OUT_PUT_DIR / f"{s.id}"
+    output_dir.mkdir(exist_ok=True)
+
     for target_image_path in img_list:
         BackgroundChainNode(
             input=[
@@ -143,13 +149,13 @@ def process_status_img_list(s: Servant, img_list: list[Path]):
                     ]
                 )
             ],
-            alpha=0.85,
+            alpha=0.92,
             target_image_path=target_image_path,
-            out_dir=OUT_PUT_DIR,
+            out_dir=output_dir,
             output_size=output_size,
         ).output()
 
-    #删除临时文件
+    # 删除临时文件
     for tmp_cropped_bg_path in bg_cropped_list:
         tmp_cropped_bg_path.unlink()
 
@@ -157,15 +163,443 @@ def process_status_img_list(s: Servant, img_list: list[Path]):
 def process_avatar_img_list(s: Servant, img_list: list[Path]):
     # wiki 的头像直接复制即可
     for avatar in img_list:
-        shutil.copy(avatar, OUT_PUT_DIR)
+        Path(OUT_PUT_DIR / f"{s.id}").mkdir(parents=True, exist_ok=True)
+        shutil.copy(avatar, OUT_PUT_DIR / f"{s.id}")
 
 
 def process_character_img_list(s: Servant, img_list: list[Path]):
-    # 满破、灵衣等没有提供头像图，实际上头像合成还要依赖 detect_face
-    for character_img in img_list:
-        print(f"检测：{character_img.name}")
-        results = detect_anime_face(character_img)
-        print(results)
+    DB_PATH = ROOT_DIR / "servants.db"
+
+    AVATRT_MASK_IMG_PATH = RES_DIR / "mask" / "BGO头像裁剪掩码.png"
+    img_mask = Image.open(AVATRT_MASK_IMG_PATH)
+
+    # SUPPORT_MASK_IMG_PATH = RES_DIR / "mask" / "助战框掩码.png"
+    # support_mask = Image.open(SUPPORT_MASK_IMG_PATH)
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+
+    servants = conn.execute("select * from servants").fetchall()
+    for svt in servants:
+        is_revoke = svt['revoke']
+
+        # 筛选出可以获取的从者条目
+        if is_revoke == 0:
+            avatar_infos = conn.execute("SELECT * FROM avatar WHERE servant_id = ?", (int(svt['id']),)).fetchall()
+            for index, info in enumerate(avatar_infos):
+                img_file_name = info['file']
+                target_image_path = RES_DIR / "assets" / f"{svt['id']}" / img_file_name
+                img = Image.open(target_image_path).convert("RGBA")
+                print(f"Processing {img_file_name} {img.size}")
+
+                left = int(info['left'])
+                top = int(info['top'])
+                right = int(info['right'])
+                bottom = int(info['bottom'])
+
+                # 微调比例，沿中心向外扩大裁剪范围，使长宽比等于 AVATRT_MASK_IMG_PATH
+                mask_ratio = img_mask.size[0] / img_mask.size[1]  # width / height
+                width = right - left
+                height = bottom - top
+                current_ratio = width / height
+
+                cx = (left + right) / 2
+                cy = (top + bottom) / 2
+
+                if current_ratio > mask_ratio:
+                    # 当前裁剪太宽，需要增加高度
+                    new_height = width / mask_ratio
+                    new_left, new_right = left, right
+                    new_top = cy - new_height / 2
+                    new_bottom = cy + new_height / 2
+                elif current_ratio < mask_ratio:
+                    # 当前裁剪太高，需要增加宽度
+                    new_width = height * mask_ratio
+                    new_top, new_bottom = top, bottom
+                    new_left = cx - new_width / 2
+                    new_right = cx + new_width / 2
+                else:
+                    new_left, new_top, new_right, new_bottom = left, top, right, bottom
+
+                # 边界检查：如果超出图片范围，沿同维度平移回图片内
+                img_width, img_height = img.size
+                if new_left < 0:
+                    new_right -= new_left
+                    new_left = 0
+                if new_right > img_width:
+                    new_left -= (new_right - img_width)
+                    new_right = img_width
+                if new_top < 0:
+                    new_bottom -= new_top
+                    new_top = 0
+                if new_bottom > img_height:
+                    new_top -= (new_bottom - img_height)
+                    new_bottom = img_height
+
+                # 基准裁剪范围（已调整为 mask 比例并完成边界回退）
+                base_left, base_top, base_right, base_bottom = int(new_left), int(new_top), int(new_right), int(
+                    new_bottom)
+                base_width = base_right - base_left
+                base_height = base_bottom - base_top
+                base_cx = (base_left + base_right) / 2
+                base_cy = (base_top + base_bottom) / 2
+
+                min_scale = 0.8
+                max_scale = 1.5
+                steps = 5
+
+                # 生成 steps 个线性插值的缩放值，加上原始 1.0，共 steps + 1 个
+                scales = [min_scale + (max_scale - min_scale) * i / (steps - 1) for i in range(steps)] + [1.0]
+
+                output_dir = OUT_PUT_DIR / f"{svt['id']}"
+                output_dir.mkdir(exist_ok=True)
+                fg_dir = RES_DIR / "foreground"
+                img_width, img_height = img.size
+
+                for scale_idx, scale in enumerate(scales):
+                    # 沿基准中心按 scale 倍数缩放裁剪范围
+                    scaled_width = base_width * scale
+                    scaled_height = base_height * scale
+                    s_left = base_cx - scaled_width / 2
+                    s_top = base_cy - scaled_height / 2
+                    s_right = base_cx + scaled_width / 2
+                    s_bottom = base_cy + scaled_height / 2
+
+                    # 边界检查：超出图片范围时沿同维度平移回图片内
+                    if s_left < 0:
+                        s_right -= s_left
+                        s_left = 0
+                    if s_right > img_width:
+                        s_left -= (s_right - img_width)
+                        s_right = img_width
+                    if s_top < 0:
+                        s_bottom -= s_top
+                        s_top = 0
+                    if s_bottom > img_height:
+                        s_top -= (s_bottom - img_height)
+                        s_bottom = img_height
+
+                    s_left, s_top, s_right, s_bottom = int(s_left), int(s_top), int(s_right), int(s_bottom)
+
+                    img_clip = img.crop((s_left, s_top, s_right, s_bottom))
+                    zoom_img_clip = img_clip.resize(img_mask.size)
+
+                    output_avatar_clip_path = output_dir / f"avatar_source_{svt['id']}_{index}_{scale_idx}.png"
+                    # 输出裁剪源
+                    zoom_img_clip.save(output_avatar_clip_path)
+
+                    # 裁剪源设置 alpha 通道
+                    zoom_img_clip.putalpha(img_mask.convert("L"))
+                    output_avatar_clip_path = output_dir / f"avatar_input_{svt['id']}_{index}_{scale_idx}.png"
+                    zoom_img_clip.save(output_avatar_clip_path)
+
+                    card_rarity = svt['card_rarity']
+
+                    default_frame_paths = [
+                        {'name': '金', 'frame': fg_dir / 'L0_金框.png'},
+                        {'name': '银', 'frame': fg_dir / 'L0_银框.png'},
+                        {'name': '铜', 'frame': fg_dir / 'L0_铜框.png'},
+                        {'name': '铁', 'frame': fg_dir / 'L0_铁框.png'},
+                        {'name': '冠位', 'frame': fg_dir / 'L0_冠位框.png'},
+                        {'name': '满级冠位', 'frame': fg_dir / 'L0_满级冠位框.png'},
+                    ]
+
+                    frame_paths_for_card_rarity = {
+                        '银卡': [
+                            {'name': '金', 'frame': fg_dir / 'L0_金框.png'},
+                            {'name': '银', 'frame': fg_dir / 'L0_银框.png'},
+                            {'name': '冠位', 'frame': fg_dir / 'L0_冠位框.png'},
+                            {'name': '满级冠位', 'frame': fg_dir / 'L0_满级冠位框.png'},
+                        ],
+                        '金卡': [
+                            {'name': '金', 'frame': fg_dir / 'L0_金框.png'},
+                            {'name': '冠位', 'frame': fg_dir / 'L0_冠位框.png'},
+                            {'name': '满级冠位', 'frame': fg_dir / 'L0_满级冠位框.png'},
+                        ],
+                        '铜卡': [
+                            {'name': '金', 'frame': fg_dir / 'L0_金框.png'},
+                            {'name': '银', 'frame': fg_dir / 'L0_银框.png'},
+                            {'name': '铜', 'frame': fg_dir / 'L0_铜框.png'},
+                            {'name': '铁', 'frame': fg_dir / 'L0_铁框.png'},
+                            {'name': '冠位', 'frame': fg_dir / 'L0_冠位框.png'},
+                            {'name': '满级冠位', 'frame': fg_dir / 'L0_满级冠位框.png'},
+                        ]
+                    }
+
+                    if card_rarity in frame_paths_for_card_rarity:
+                        frame_paths = frame_paths_for_card_rarity[card_rarity]
+                    else:
+                        frame_paths = default_frame_paths
+
+                    expand_chain_node_output = ExpandClipChainNode(
+                        input=[
+                            MergeChainNodeGroup(
+                                name='default',
+                                layers=[
+                                    {
+                                        'template': output_avatar_clip_path,
+                                    }
+                                ]
+                            )
+                        ],
+                        out_dir=output_dir,
+                        frame_paths=frame_paths,
+                    ).output()
+
+                    default_label_paths = [
+                        {'name': '金', 'labels': [fg_dir / 'L1_金标.png', fg_dir / 'L1_满级金标.png']},
+                        {'name': '银', 'labels': [fg_dir / 'L1_银标.png']},
+                        {'name': '铜', 'labels': [fg_dir / 'L1_铜标.png']},
+                        {'name': '铁', 'labels': [fg_dir / 'L1_铁标.png']},
+                        {'name': '冠位', 'labels': [fg_dir / 'L1_冠位标.png']},
+                        {'name': '满级冠位', 'labels': [fg_dir / 'L1_满级冠位标.png']},
+                    ]
+
+                    frame_paths_for_card_rarity = {
+                        '银卡': [
+                            {'name': '金', 'labels': [fg_dir / 'L1_金标.png', fg_dir / 'L1_满级金标.png']},
+                            {'name': '银', 'labels': [fg_dir / 'L1_银标.png']},
+                            {'name': '冠位', 'labels': [fg_dir / 'L1_冠位标.png']},
+                            {'name': '满级冠位', 'labels': [fg_dir / 'L1_满级冠位标.png']},
+                        ],
+                        '金卡': [
+                            {'name': '金', 'labels': [fg_dir / 'L1_金标.png', fg_dir / 'L1_满级金标.png']},
+                            {'name': '冠位', 'labels': [fg_dir / 'L1_冠位标.png']},
+                            {'name': '满级冠位', 'labels': [fg_dir / 'L1_满级冠位标.png']},
+                        ],
+                        '铜卡': [
+                            {'name': '金', 'labels': [fg_dir / 'L1_金标.png', fg_dir / 'L1_满级金标.png']},
+                            {'name': '银', 'labels': [fg_dir / 'L1_银标.png']},
+                            {'name': '铜', 'labels': [fg_dir / 'L1_铜标.png']},
+                            {'name': '冠位', 'labels': [fg_dir / 'L1_冠位标.png']},
+                            {'name': '满级冠位', 'labels': [fg_dir / 'L1_满级冠位标.png']},
+                        ]
+                    }
+
+                    if card_rarity in frame_paths_for_card_rarity:
+                        label_paths = frame_paths_for_card_rarity[card_rarity]
+                    else:
+                        label_paths = default_label_paths
+
+                    label_groups = LabelChainNode(
+                        input=expand_chain_node_output,
+                        out_dir=output_dir,
+                        label_paths=label_paths,
+                    ).output()
+
+                    # 固定，默认全部满破
+                    status_groups = StatusChainNode(
+                        input=label_groups,
+                        out_dir=output_dir,
+                        status_paths=[
+                            {'name': name, 'status': [fg_dir / 'L1_满破标.png']}
+                            for name in ('金', '银', '铜', '铁', '冠位', '满级冠位')
+                        ],
+                    ).output()
+
+                    stars_chain_for_card_rarity = {
+                        '金卡': [
+                            {
+                                'name': '金',
+                                'stars': [Path(RES_DIR / "foreground" / x) for x in [
+                                    'L1_4星.png',
+                                    'L1_4星再临.png',
+                                    'L1_5星.png',
+                                    'L1_5星再临.png',
+                                ]]
+                            },
+                            {
+                                'name': '冠位',
+                                'stars': [Path(RES_DIR / "foreground" / x) for x in [
+                                    'L1_4星满级.png',
+                                    'L1_5星满级.png',
+                                ]]
+                            },
+                            {
+                                'name': '满级冠位',
+                                'stars': [Path(RES_DIR / "foreground" / x) for x in [
+                                    'L1_4星冠位.png',
+                                    'L1_5星冠位.png'
+                                ]]
+                            }
+                        ],
+                        '银卡': [
+                            {
+                                'name': '银',
+                                'stars': [Path(RES_DIR / "foreground" / x) for x in [
+                                    'L1_3星.png',
+                                    'L1_3星再临.png',
+                                ]]
+                            },
+                            {
+                                'name': '冠位',
+                                'stars': [Path(RES_DIR / "foreground" / x) for x in [
+                                    'L1_3星冠位.png',
+                                ]]
+                            },
+                            {
+                                'name': '满级冠位',
+                                'stars': [Path(RES_DIR / "foreground" / x) for x in [
+                                    'L1_3星满级.png'
+                                ]]
+                            }
+                        ],
+                        '铜卡': [
+                            {
+                                'name': '铜',
+                                'stars': [Path(RES_DIR / "foreground" / x) for x in [
+                                    'L1_1星.png',
+                                    'L1_1星再临.png',
+                                    'L1_2星.png',
+                                    'L1_2星再临.png',
+                                ]]
+                            },
+                            {
+                                'name': '冠位',
+                                'stars': [Path(RES_DIR / "foreground" / x) for x in [
+                                    'L1_1星冠位.png',
+                                    'L1_2星冠位.png',
+                                ]]
+                            },
+                            {
+                                'name': '满级冠位',
+                                'stars': [Path(RES_DIR / "foreground" / x) for x in [
+                                    'L1_1星满级.png',
+                                    'L1_2星满级.png'
+                                ]]
+                            }
+                        ],
+                    }
+
+                    if card_rarity in stars_chain_for_card_rarity:
+                        stars_paths = stars_chain_for_card_rarity[card_rarity]
+                    else:
+                        stars_paths = stars_chain_for_card_rarity['铜卡']
+
+                    stars_groups = StarsChainNode(
+                        input=status_groups,
+                        out_dir=output_dir,
+                        stars_paths=stars_paths,
+                    ).output()
+
+                    servant_class = svt['servant_class']
+
+                    # 验证职阶是否在已知范围内
+                    valid_classes = [
+                        'Shielder', 'Saber', 'Archer', 'Lancer', 'Rider', 'Caster',
+                        'Assassin', 'Berserker', 'Ruler', 'Avenger', 'Alterego',
+                        'MoonCancer', 'Foreigner', 'Pretender', 'Beast'
+                    ]
+                    if servant_class not in valid_classes:
+                        warnings.warn(f"未知的职阶: {servant_class}")
+
+                    class_chain_for_card_rarity = {
+                        '金卡': [
+                            {'name': '金', 'class': [fg_dir / f'金卡{servant_class}.png']},
+                            {'name': '冠位', 'class': [fg_dir / f'冠位{servant_class}.png']},
+                            {'name': '满级冠位', 'class': [fg_dir / f'冠位{servant_class}.png']},
+                        ],
+                        '银卡': [
+                            {'name': '金', 'class': [fg_dir / f'金卡{servant_class}.png']},
+                            {'name': '银', 'class': [fg_dir / f'银卡{servant_class}.png']},
+                            {'name': '冠位', 'class': [fg_dir / f'冠位{servant_class}.png']},
+                            {'name': '满级冠位', 'class': [fg_dir / f'冠位{servant_class}.png']},
+                        ],
+                        '铜卡': [
+                            {'name': '金', 'class': [fg_dir / f'金卡{servant_class}.png']},
+                            {'name': '银', 'class': [fg_dir / f'银卡{servant_class}.png']},
+                            {'name': '铜', 'class': [fg_dir / f'铜卡{servant_class}.png']},
+                            {'name': '冠位', 'class': [fg_dir / f'冠位{servant_class}.png']},
+                            {'name': '满级冠位', 'class': [fg_dir / f'冠位{servant_class}.png']},
+                        ],
+                        # 黑卡只有一张
+                        '黑卡': [
+                            {'name': '铁', 'class': [fg_dir / f'黑卡{servant_class}.png']},
+                            {'name': '冠位', 'class': [fg_dir / f'冠位{servant_class}.png']},
+                            {'name': '满级冠位', 'class': [fg_dir / f'冠位{servant_class}.png']},
+                        ]
+                    }
+
+                    if card_rarity in class_chain_for_card_rarity:
+                        class_paths = class_chain_for_card_rarity[card_rarity]
+                    else:
+                        class_paths = class_chain_for_card_rarity['黑卡']
+
+                    # 检查职阶文件是否存在，不存在则从 class 中移除
+                    filtered_class_paths = []
+                    for item in class_paths:
+                        existing_paths = []
+                        for path in item['class']:
+                            if path.exists():
+                                existing_paths.append(path)
+                            else:
+                                warnings.warn(f"职阶文件不存在，已跳过: {path}")
+                        if existing_paths:
+                            filtered_class_paths.append({**item, 'class': existing_paths})
+                    class_paths = filtered_class_paths
+
+                    ClassChainNode(
+                        input=stars_groups,
+                        out_dir=output_dir,
+                        class_paths=class_paths,
+                    ).output()
+                
+                    # ── 助战合成流程 ──
+                    # 背景图 L0 映射：card_rarity -> 助战框底图
+                    # frame_bg_map = {
+                    #     '金卡': fg_dir / '金助战框.png',
+                    #     '银卡': fg_dir / '银助战框.png',
+                    #     '铜卡': fg_dir / '铜助战框.png',
+                    #     '': fg_dir / '铁助战框.png',       # 黑卡 card_rarity 为空字符串
+                    #     '黑卡': fg_dir / '铁助战框.png',
+                    #     '冠位': fg_dir / '冠位助战框.png',
+                    # }
+                
+                    # 前景图序列：铜卡可升级为银卡和金卡，从当前稀有度开始取，一直到冠位
+                    # support_paths_for_card_rarity = {
+                    #     '铜卡': [
+                    #         {'name': '铜', 'support': [fg_dir / '铜助战框前景.png', fg_dir / '铜助战框前景2.png']},
+                    #         {'name': '银', 'support': [fg_dir / '银助战框前景.png', fg_dir / '银助战框前景2.png']},
+                    #         {'name': '金', 'support': [fg_dir / '金助战框前景.png', fg_dir / '金助战框前景2.png']},
+                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
+                    #     ],
+                    #     '银卡': [
+                    #         {'name': '银', 'support': [fg_dir / '银助战框前景.png', fg_dir / '银助战框前景2.png']},
+                    #         {'name': '金', 'support': [fg_dir / '金助战框前景.png', fg_dir / '金助战框前景2.png']},
+                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
+                    #     ],
+                    #     '金卡': [
+                    #         {'name': '金', 'support': [fg_dir / '金助战框前景.png', fg_dir / '金助战框前景2.png']},
+                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
+                    #     ],
+                    #     # 黑卡只有一张，不可升级
+                    #     '': [
+                    #         {'name': '铁', 'support': [fg_dir / '铁助战框前景.png', fg_dir / '铁助战框前景2.png']},
+                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
+                    #     ],
+                    #     '黑卡': [
+                    #         {'name': '铁', 'support': [fg_dir / '铁助战框前景.png', fg_dir / '铁助战框前景2.png']},
+                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
+                    #     ],
+                    #     '冠位': [
+                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
+                    #     ],
+                    # }
+                    #
+                    # output_dir = OUT_PUT_DIR / f"{svt['id']}" / 'support'
+                    # output_dir.mkdir(parents=True, exist_ok=True)
+
+                    # 拍扁目录：将子目录中的文件移动到 output_dir，然后删除子目录
+                    for sub in output_dir.iterdir():
+                        if sub.is_dir():
+                            for file in sub.iterdir():
+                                if file.is_file():
+                                    shutil.move(str(file), str(output_dir / file.name))
+                            shutil.rmtree(sub)
+
+                img.close()
+    conn.close()
+    img_mask.close()
 
 
 if __name__ == '__main__':

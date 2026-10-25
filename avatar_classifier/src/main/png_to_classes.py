@@ -3,8 +3,8 @@
 
 内置各目录的生成配置（画布尺寸 / 目标缩放尺寸 / 粘贴偏移），
 也可通过命令行参数 --canvas --target --offset 动态覆盖：
-    徽标:     画布 160x160, 目标 38x38, 偏移 (14, 7)
-    冠位徽标: 画布 160x160, 目标 45x45, 偏移 (11, 4)
+    徽标:     画布 160x160, 目标 48x48, 偏移 (14, 7)
+    冠位徽标: 画布 160x160, 目标 58x58, 偏移 (11, 4)
 
 运行命令（项目根目录下执行）：
     .venv/Scripts/python.exe -m main.png_to_classes res/徽标 --out-dir res/foreground
@@ -19,12 +19,12 @@ from PIL import Image
 
 # 各目录内置预设配置，键为源目录名
 PRESETS: dict[str, dict] = {
-    "徽标": {"canvas": (160, 160), "target": (38, 38), "offset": (14, 7)},
-    "冠位徽标": {"canvas": (160, 160), "target": (45, 45), "offset": (11, 4)},
+    "徽标": {"canvas": (160, 160), "target": (48, 48), "offset": (10, 3)},
+    "冠位徽标": {"canvas": (160, 160), "target": (58, 58), "offset": (4, -2)},
 }
 
 # 目录名未命中预设时的兜底配置
-DEFAULT_CONFIG = {"canvas": (160, 160), "target": (45, 45), "offset": (11, 4)}
+DEFAULT_CONFIG = {"canvas": (160, 160), "target": (48, 48), "offset": (4, -2)}
 
 
 def convert(src: Path, dst_dir: Path, canvas_size: tuple[int, int],
