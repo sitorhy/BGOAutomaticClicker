@@ -263,7 +263,7 @@ class TestUnit(unittest.TestCase):
             },
             {
                 'name': 'class',
-                'template': RES_DIR / 'foreground' / '金卡Breakser.png',
+                'template': RES_DIR / 'foreground' / '金卡Berserker.png',
             },
             {
                 'fit': 'fill',  # contain / cover / fill
@@ -577,7 +577,7 @@ def test_merge_layers():
             input=collect_groups(output_dir),
             out_dir=output_dir,
             class_paths=[
-                {'name': '金', 'class': [fg_dir / '金卡Breakser.png']},
+                {'name': '金', 'class': [fg_dir / '金卡Berserker.png']},
                 {'name': '银', 'class': [fg_dir / '银卡Berserker.png']},
                 {'name': '铜', 'class': [fg_dir / '铜卡Berserker.png']},
                 {'name': '铁', 'class': []},
@@ -686,7 +686,7 @@ def test_merge_layers_chained():
         input=stars_groups,
         out_dir=output_dir,
         class_paths=[
-            {'name': '金', 'class': [fg_dir / '金卡Breakser.png']},
+            {'name': '金', 'class': [fg_dir / '金卡Berserker.png']},
             {'name': '银', 'class': [fg_dir / '银卡Berserker.png']},
             {'name': '铜', 'class': [fg_dir / '铜卡Berserker.png']},
             {'name': '铁', 'class': []},

@@ -49,8 +49,8 @@ def merge_layers(layers: list[LayerSpec]):
     canvas: np.ndarray | None = None
     for layer in layers:
         template_nd_arr = parse_layer_image(layer['template'])
-        print(
-            f"Layer: {layer['name'] if 'name' in layer else 'anonymous'}, Template: {template_nd_arr.shape}")
+        # print(
+        #     f"Layer: {layer['name'] if 'name' in layer else 'anonymous'}, Template: {template_nd_arr.shape}")
 
         """ 创建画布 ，以第一幅图的大小为基准 """
         if canvas is None:

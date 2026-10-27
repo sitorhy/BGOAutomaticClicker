@@ -3,6 +3,7 @@ import random
 import shutil
 import sqlite3
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from os import listdir
 from pathlib import Path
@@ -13,7 +14,7 @@ from main.config import RES_DIR, ROOT_DIR, BG_DIR, TEMP_DIR
 from main.merge_chain import ClassifyChainNode, BackgroundChainNode, MergeChainNodeGroup, \
     ExpandClipChainNode, LabelChainNode, StatusChainNode, StarsChainNode, ClassChainNode
 
-OUT_PUT_DIR = Path("I:\\temp")
+OUT_PUT_DIR = TEMP_DIR
 OUT_PUT_DIR.mkdir(exist_ok=True)
 
 
@@ -84,21 +85,37 @@ def main():
 
                 match group:
                     case 'status':
-                    # 再临阶段
                         process_status_img_list(s, img_list)
-                        break
                     case 'avatar':
-                    # wiki的头像图，用于立绘的头像模板匹配
                        process_avatar_img_list(s, img_list)
-                       break
-                    case 'character':
-                        process_character_img_list(s, img_list)
-                        break
                     case _:
                         print(f"Unknown group: {group}")
 
         else:
             warnings.warn(f"Servant {servant_id} res folder does not exist.")
+
+    # character 分支单独执行，基于数据库全量数据生成头像
+    process_character_img_list()
+
+
+def process_one_status_image(target_image_path, bg_cropped_list, output_dir, output_size):
+    """处理单张状态图片的背景融合。"""
+    BackgroundChainNode(
+        input=[
+            MergeChainNodeGroup(
+                name='default',
+                layers=[
+                    {
+                        'template': bg_path_cropped
+                    } for bg_path_cropped in bg_cropped_list
+                ]
+            )
+        ],
+        alpha=0.92,
+        target_image_path=target_image_path,
+        out_dir=output_dir,
+        output_size=output_size,
+    ).output()
 
 
 def process_status_img_list(s: Servant, img_list: list[Path]):
@@ -137,23 +154,23 @@ def process_status_img_list(s: Servant, img_list: list[Path]):
     output_dir = OUT_PUT_DIR / f"{s.id}"
     output_dir.mkdir(exist_ok=True)
 
-    for target_image_path in img_list:
-        BackgroundChainNode(
-            input=[
-                MergeChainNodeGroup(
-                    name='default',
-                    layers=[
-                        {
-                            'template': bg_path_cropped
-                        } for bg_path_cropped in bg_cropped_list
-                    ]
-                )
-            ],
-            alpha=0.92,
-            target_image_path=target_image_path,
-            out_dir=output_dir,
-            output_size=output_size,
-        ).output()
+    # 使用多线程处理每张图片
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        futures = [
+            pool.submit(
+                process_one_status_image,
+                target_image_path,
+                bg_cropped_list,
+                output_dir,
+                output_size
+            )
+            for target_image_path in img_list
+        ]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"处理状态图片时出错: {e}")
 
     # 删除临时文件
     for tmp_cropped_bg_path in bg_cropped_list:
@@ -167,30 +184,20 @@ def process_avatar_img_list(s: Servant, img_list: list[Path]):
         shutil.copy(avatar, OUT_PUT_DIR / f"{s.id}")
 
 
-def process_character_img_list(s: Servant, img_list: list[Path]):
-    DB_PATH = ROOT_DIR / "servants.db"
-
-    AVATRT_MASK_IMG_PATH = RES_DIR / "mask" / "BGO头像裁剪掩码.png"
-    img_mask = Image.open(AVATRT_MASK_IMG_PATH)
-
-    # SUPPORT_MASK_IMG_PATH = RES_DIR / "mask" / "助战框掩码.png"
-    # support_mask = Image.open(SUPPORT_MASK_IMG_PATH)
-
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-
-    servants = conn.execute("select * from servants").fetchall()
-    for svt in servants:
+def process_one_servant(svt, conn, img_mask_path, output_base_dir, res_dir, fg_dir):
+    """处理单个从者的头像生成，每个线程独立打开 img_mask。"""
+    img_mask = Image.open(img_mask_path)
+    try:
         is_revoke = svt['revoke']
 
         # 筛选出可以获取的从者条目
         if is_revoke == 0:
+            print(f"Processing {svt['id']} {svt['name_cn']} {svt['servant_class']}")
             avatar_infos = conn.execute("SELECT * FROM avatar WHERE servant_id = ?", (int(svt['id']),)).fetchall()
             for index, info in enumerate(avatar_infos):
                 img_file_name = info['file']
-                target_image_path = RES_DIR / "assets" / f"{svt['id']}" / img_file_name
+                target_image_path = res_dir / "assets" / f"{svt['id']}" / img_file_name
                 img = Image.open(target_image_path).convert("RGBA")
-                print(f"Processing {img_file_name} {img.size}")
 
                 left = int(info['left'])
                 top = int(info['top'])
@@ -251,9 +258,8 @@ def process_character_img_list(s: Servant, img_list: list[Path]):
                 # 生成 steps 个线性插值的缩放值，加上原始 1.0，共 steps + 1 个
                 scales = [min_scale + (max_scale - min_scale) * i / (steps - 1) for i in range(steps)] + [1.0]
 
-                output_dir = OUT_PUT_DIR / f"{svt['id']}"
+                output_dir = output_base_dir / f"{svt['id']}"
                 output_dir.mkdir(exist_ok=True)
-                fg_dir = RES_DIR / "foreground"
                 img_width, img_height = img.size
 
                 for scale_idx, scale in enumerate(scales):
@@ -598,8 +604,42 @@ def process_character_img_list(s: Servant, img_list: list[Path]):
                             shutil.rmtree(sub)
 
                 img.close()
+    finally:
+        img_mask.close()
+
+
+def process_character_img_list():
+    DB_PATH = ROOT_DIR / "servants.db"
+    AVATRT_MASK_IMG_PATH = RES_DIR / "mask" / "BGO头像裁剪掩码.png"
+    fg_dir = RES_DIR / "foreground"
+
+    # 主线程创建连接，只读场景下加 check_same_thread=False 可跨线程共享
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+
+    servants = conn.execute("select * from servants").fetchall()
+
+    # 使用多线程处理每个从者
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        futures = [
+            pool.submit(
+                process_one_servant,
+                svt,
+                conn,
+                AVATRT_MASK_IMG_PATH,
+                OUT_PUT_DIR,
+                RES_DIR,
+                fg_dir
+            )
+            for svt in servants
+        ]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"处理从者时出错: {e}")
+
     conn.close()
-    img_mask.close()
 
 
 if __name__ == '__main__':
