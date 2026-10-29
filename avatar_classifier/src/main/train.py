@@ -1,6 +1,8 @@
 import json
 import sqlite3
+import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -38,6 +40,36 @@ class Servant:
     atk_max: int | None = None
     hp_max: int | None = None
     revoke: int = 0
+
+class RecordFile:
+    """线程安全的提取记录文件"""
+
+    def __init__(self, file_path: Path):
+        self.file_path = file_path
+        self._lock = threading.Lock()
+        self._data: dict = {}
+
+    def load(self, servant_ids: list[int]):
+        """加载已有记录，缺失的从者标记为 0"""
+        with self._lock:
+            if self.file_path.exists():
+                self._data = json.loads(self.file_path.read_text())
+            for servant_id in servant_ids:
+                self._data.setdefault(str(servant_id), 0)
+            self._save()
+
+    def get(self, servant_id: int) -> int:
+        with self._lock:
+            return self._data.get(str(servant_id), 0)
+
+    def set(self, servant_id: int, value: int):
+        """更新标记并持久化到磁盘（线程安全）"""
+        with self._lock:
+            self._data[str(servant_id)] = value
+            self._save()
+
+    def _save(self):
+        self.file_path.write_text(json.dumps(self._data, indent=4))
 
 class FeatureExtractor:
 
@@ -145,41 +177,54 @@ def extract_dir(class_dir: Path, output_dir: Path):
     )
     print(f"\n✓ {dir_name} 特征已缓存")
 
+def prepare_one(servant: Servant, record: RecordFile, images_dir: Path, output_path: Path):
+    if servant.revoke == 1:
+        print(f"\033[33m跳过 {servant.name_cn}\033[0m")
+    else:
+        if record.get(servant.id) == 0:
+            dir_path = images_dir / f"{servant.id}"
+            if dir_path.exists():
+                print(f"正在处理 {servant.name_cn}")
+                extract_dir(dir_path, output_path)
+                record.set(servant.id, 1)
+            else:
+                warnings.warn(f"不存在 {servant.id} {servant.name_cn}")
+        else:
+            print(f"\033[33m跳过 已标记提取 {servant.name_cn}\033[0m")
 
 def train(images_dir: Path, output_path: Path, record_file_path: Path):
     if not record_file_path.parent.exists():
         record_file_path.parent.mkdir(parents=True)
 
+    if not output_path.exists():
+        output_path.mkdir(parents=True)
+
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     rows = conn.execute("select * from servants").fetchall()
     servants = [Servant(**dict(r)) for r in rows]
-
-    record_file_json = {}
-    if not record_file_path.exists():
-        for servant in servants:
-            record_file_json[servant.id] = 0
-        record_file_path.write_text(json.dumps(record_file_json, indent = 4))
-    else:
-        record_file_json = json.loads(record_file_path.read_text())
-
     conn.close()
 
-    for servant in servants:
-        if servant.revoke == 1:
-            print(f"\033[33m跳过 {servant.name_cn}\033[0m")
-        else:
-            if record_file_json[f"{servant.id}"] == 0:
-                dir_path = images_dir / f"{servant.id}"
-                if dir_path.exists():
-                    print(f"正在处理 {servant.name_cn}")
-                    extract_dir(dir_path, output_path)
-                    record_file_json[f"{servant.id}"] = 1
-                    record_file_path.write_text(json.dumps(record_file_json, indent = 4))
-                else:
-                    warnings.warn(f"不存在 {servant.id} {servant.name_cn}")
-            else:
-                print(f"\033[33m跳过 已标记提取 {servant.name_cn}\033[0m")
+    record = RecordFile(record_file_path)
+    record.load([s.id for s in servants])
+
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        promises = [
+            pool.submit(
+                prepare_one,
+                servant,
+                record,
+                images_dir,
+                output_path,
+            ) for servant in servants[:5]
+        ]
+
+        for future in promises:
+            try:
+                future.result()
+            except Exception as e:
+                print(f"特征提取异常: {e}")
+
 
 if __name__ == '__main__':
     IMAGES_DIR = Path("G:/temp")
