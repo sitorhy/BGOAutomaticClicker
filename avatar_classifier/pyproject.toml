@@ -12,8 +12,11 @@ dependencies = [
     "scipy>=1.16.0",
     "scipy-stubs~=1.18.1",
     "opencv-contrib-python>=5.0.0.93",
-    "fastapi[standard]==0.144.0",
+    "fastapi[standard]==0.162.0",
     "uvicorn>=0.54.0",
+    "scikit-learn>=1.9.0",
+    "torchvision>=0.29.2",
+    "torch>=2.13"
 ]
 
 [tool.uv]
