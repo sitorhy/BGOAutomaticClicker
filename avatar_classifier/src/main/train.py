@@ -334,8 +334,8 @@ def train_model(output_path: Path, npz_labels_map: list[Servant]):
     print(f"\n使用 XGBoost 训练，device={device}")
 
     clf = XGBClassifier(
-        n_estimators=200,  # 决策树轮数（多分类实际树数 = 轮数 × 类别数）
-        max_depth=6,  # 限制树深度，防止过拟合 + 控制 ONNX 体积
+        n_estimators=800,  # 决策树轮数（多分类实际树数 = 轮数 × 类别数）
+        max_depth=30,  # 限制树深度，防止过拟合 + 控制 ONNX 体积
         learning_rate=0.1,  # 学习率（步长收缩系数）
         subsample=0.8,  # 每棵树使用的样本比例（防止过拟合）
         colsample_bytree=0.8,  # 每棵树使用的特征比例
