@@ -202,6 +202,7 @@ def train(images_dir: Path, output_path: Path, record_file_path: Path):
             rows.append(conn.execute("select * from servants where id = ?", (id,)).fetchone())
 
     servants = [Servant(**dict(r)) for r in rows]
+    servants = [s for s in servants if s.revoke == 0]
 
     conn.close()
 
