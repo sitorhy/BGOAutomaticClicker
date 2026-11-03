@@ -42,6 +42,7 @@ class Servant:
     atk_max: int | None = None
     hp_max: int | None = None
     revoke: int = 0
+    dir_name: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -61,6 +62,7 @@ class Servant:
             "atk_max": self.atk_max,
             "hp_max": self.hp_max,
             "revoke": self.revoke,
+            "dir_name": self.dir_name,
         }
 
 class RecordFile:
@@ -75,7 +77,7 @@ class RecordFile:
         """加载已有记录，缺失的子目录标记为 0"""
         with self._lock:
             if self.file_path.exists():
-                self._data = json.loads(self.file_path.read_text())
+                self._data = json.loads(self.file_path.read_text(encoding="utf-8"))
             for dir_name in dir_names:
                 self._data.setdefault(dir_name, 0)
             self._save()
@@ -91,9 +93,10 @@ class RecordFile:
             self._save()
 
     def _save(self):
-        self.file_path.write_text(json.dumps(self._data, indent=4))
+        self.file_path.write_text(json.dumps(self._data, indent=4, ensure_ascii=False))
 
 
+# 特征提取器，删掉模型的分类头，这样模型输出的就是特征而不是分类结果
 class FeatureExtractor:
 
     # 单例：显存里只保留一份模型权重，避免多线程各自实例化导致爆显存
@@ -125,7 +128,25 @@ class FeatureExtractor:
         self.model.eval()
         self.model.to(DEVICE)
 
-        self.transform = transforms.Compose([
+        # 训练集流水线：带数据增强
+        self.transform_train = transforms.Compose([
+            # 数据增强，仅训练集使用，测试/验证图必须走 self.transform_eval
+            transforms.RandomResizedCrop(IMAGE_SIZE, scale=(0.7, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+
+            self._base_transforms(),
+        ])
+
+        # 测试集（验证集）流水线：不带数据增强，保证特征提取可复现
+        self.transform_eval = transforms.Compose([
+            self._base_transforms(),
+        ])
+
+    @staticmethod
+    def _base_transforms() -> transforms.Compose:
+        """两条流水线共用的基础预处理"""
+        return transforms.Compose([
             # 图像缩放到 224x224（ResNet18 的标准输入尺寸）
             # 全连接层要求输入的特征图尺寸必须是固定的。为了能够成批次（Batch）处理不同分辨率的原始图片，必须在输入模型前将它们裁剪或缩放到完全相同的尺寸。
             transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
@@ -142,11 +163,12 @@ class FeatureExtractor:
 
     # 提取特征（属于模型推理/预测阶段，而不是训练阶段），不需要反向传播
     @torch.no_grad()
-    def extract(self, image_path: Path):
+    def extract(self, image_path: Path, da: bool = False):
         img = Image.open(image_path).convert("RGB")
 
-        # 图片输入流水线转换为 Tensor 张量
-        x = self.transform(img)
+        # 图片输入流水线转换为 Tensor 张量（da=True 走带数据增强的训练集流水线）
+        transform = self.transform_train if da else self.transform_eval
+        x = transform(img)
 
         # unsqueeze(0)：在最前面增加一个维度（把形状从 [通道, 高, 宽] 变成 [1, 通道, 高, 宽]）。
         # 深度学习模型通常要求输入是一个“批次（Batch）”，哪怕只有一张图，也要伪装成“包含 1 张图片的批次”。
@@ -164,7 +186,7 @@ class FeatureExtractor:
         # 如果模型是在 GPU 上运行的，必须先通过 .cpu() 把数据复制回内存（CPU），然后才能调用 .numpy() 转换
         return feat.cpu().numpy()
 
-    def extract_batch(self, image_paths, show_progress=True):
+    def extract_batch(self, image_paths, da: bool = False, show_progress=True):
         features = []
 
         total = len(image_paths)
@@ -172,7 +194,7 @@ class FeatureExtractor:
         for index, image_path in enumerate(image_paths, 1):
             if show_progress:
                 print(f"  [{index:>3}/{total}] {image_path.name}")
-            feature = self.extract(image_path)
+            feature = self.extract(image_path, da=da)
             features.append(feature)
 
         return np.array(features)
@@ -191,7 +213,7 @@ def extract_dir(class_dir: Path, output_dir: Path, npz_labels_map: list[Servant]
         raise ValueError(f"目录名 {dir_name} 无法解析从者ID")
     # 根据从者ID 在 npz_labels_map 中查找索引
     servant_id = int(dir_prefix)
-    label_idx = next((i for i, s in enumerate(npz_labels_map) if s.id == servant_id), -1)
+    label_idx = next((i for i, s in enumerate(npz_labels_map) if s.id == servant_id and s.dir_name == dir_name), -1)
     if label_idx == -1:
         raise ValueError(f"从者ID {dir_prefix} 未找到")
 
@@ -209,8 +231,9 @@ def extract_dir(class_dir: Path, output_dir: Path, npz_labels_map: list[Servant]
     # 共享单例，不再每次新建模型实例
     extractor = FeatureExtractor.get()
 
-    train_values = extractor.extract_batch(train_paths, show_progress=True)
-    test_values = extractor.extract_batch(test_paths, show_progress=True)
+    # 训练集加数据增强（da=True），验证集不加（da=False）
+    train_values = extractor.extract_batch(train_paths, da=True, show_progress=True)
+    test_values = extractor.extract_batch(test_paths, da=False, show_progress=True)
 
     # 缓存特征到磁盘（下次训练可以直接加载，跳过特征提取）
     np.savez(
@@ -224,36 +247,15 @@ def extract_dir(class_dir: Path, output_dir: Path, npz_labels_map: list[Servant]
     return dir_name
 
 
-def find_servant_dirs(images_dir: Path, servant_id: int) -> list[Path]:
-    """在 images_dir 中查找从者对应的所有子目录（目录名可能形如 "1_1"，以从者ID为前缀或后缀）"""
-    id_str = str(servant_id)
-    dirs = []
-    for entry in images_dir.iterdir():
-        if not entry.is_dir():
-            continue
-        name = entry.name
-        if name == id_str or name.startswith(f"{id_str}_") or name.endswith(f"_{id_str}"):
-            dirs.append(entry)
-    return dirs
-
-
 def prepare_one(servant: Servant, record: RecordFile, images_dir: Path, output_path: Path, npz_labels_map: list[Servant]):
     if servant.revoke == 1:
         raise ValueError(f"从者ID {servant.id} 已标记为排除")
     else:
-        dir_paths = find_servant_dirs(images_dir, servant.id)
-        if not dir_paths:
-            warnings.warn(f"不存在 {servant.id} {servant.name_cn}")
-            return
-        processed = []
-        for dir_path in dir_paths:
-            if record.get(dir_path.name) == 0:
-                print(f"正在处理 {servant.name_cn}")
-                dir_name = extract_dir(dir_path, output_path, npz_labels_map)
-                record.set(dir_name, 1)
-                processed.append(dir_name)
-        if processed:
-            print(f"\033[32m✓ 已提取 {', '.join(processed)}\033[0m")
+        dir_path = images_dir / servant.dir_name
+        if record.get(dir_path.name) == 0:
+            print(f"正在处理 {servant.name_cn}")
+            dir_name = extract_dir(dir_path, output_path, npz_labels_map)
+            record.set(dir_name, 1)
         else:
             print(f"\033[33m跳过 已标记提取 {servant.name_cn}\033[0m")
 
@@ -335,6 +337,8 @@ def load_cached_features(output_dir: Path) -> tuple[np.ndarray, np.ndarray, np.n
 def create_label_map(dir_names: list[str], servants: list[Servant], output_dir: Path):
     # 支持分组格式 "1" "1_1" => id 为 1
     # 重新训练就删掉 label_map.json 和 train.json
+    servants_with_dir_name = []
+
     file_path = output_dir / "label_map.json"
     if not file_path.exists():
         json_list = []
@@ -350,14 +354,23 @@ def create_label_map(dir_names: list[str], servants: list[Servant], output_dir: 
             if id in seen_ids:
                 continue
             seen_ids.add(id)
-            servant = next((s for s in servants if s.id == id), None)
+            servant: Servant | None = next((s for s in servants if s.id == id), None)
+
             if servant is None:
                 raise ValueError(f"从者ID {id} 未找到")
-            json_list.append(servant.to_dict())
-        file_path.write_text(json.dumps(json_list, indent=4))
+
+            servant_copy = Servant(**servant.to_dict())
+            servant_copy.dir_name = dir_name
+            servants_with_dir_name.append(servant_copy)
+
+            json_list.append(servant_copy.to_dict())
+        # 包含日文不能用GBK编码
+        file_path.write_text(json.dumps(json_list, indent=4, ensure_ascii=False), encoding='utf-8')
         print(f"✓ 标签映射表已保存到 {file_path}")
-    list_from_file = json.loads(file_path.read_text())
-    return [Servant(**s) for s in list_from_file]
+    else:
+        servants_with_dir_name = [Servant(**s) for s in json.loads(file_path.read_text(encoding='utf-8'))]
+
+    return servants_with_dir_name
 
 def train_model(output_path: Path, npz_labels_map: list[Servant]):
     # 从缓存的 npz 文件加载训练集
@@ -504,11 +517,11 @@ def train(images_dir: Path, output_path: Path, record_file_path: Path):
                 ) for servant in npz_labels_map
             ]
 
-            for future in promises:
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"特征提取异常: {e}")
+        for future in promises:
+            try:
+                future.result()
+            except Exception as e:
+                print(f"特征提取异常: {e}")
 
 
     train_model(output_path, npz_labels_map)

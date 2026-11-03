@@ -21,7 +21,7 @@ EXPECTED_MAP_FILE = "expected.json"
 def load_label_map(model_root: Path) -> list[dict]:
     """加载 label_map.json，返回从者列表（索引即模型输出的类别 ID）"""
     label_map_path = model_root / "label_map.json"
-    return json.loads(label_map_path.read_text())
+    return json.loads(label_map_path.read_text(encoding="utf-8"))
 
 
 def load_expected_map(test_input_root: Path) -> dict[str, int] | None:
