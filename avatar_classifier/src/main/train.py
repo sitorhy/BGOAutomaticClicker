@@ -1,23 +1,19 @@
+import argparse
 import json
 import sqlite3
 import threading
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-
-import joblib
-import numpy as np
-import torch
-
 from pathlib import Path
 
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report
-from torchvision import models, transforms
+import numpy as np
+import torch
 from PIL import Image
-from xgboost import XGBClassifier
-
+from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
+from torchvision import models, transforms
+from xgboost import XGBClassifier
 
 from main.config import TEMP_DIR, ROOT_DIR
 
@@ -68,30 +64,30 @@ class Servant:
         }
 
 class RecordFile:
-    """线程安全的提取记录文件"""
+    """线程安全的提取记录文件，以子目录名称作为记录键值（如 "1_1": 1）"""
 
     def __init__(self, file_path: Path):
         self.file_path = file_path
         self._lock = threading.Lock()
         self._data: dict = {}
 
-    def load(self, servant_ids: list[int]):
-        """加载已有记录，缺失的从者标记为 0"""
+    def load(self, dir_names: list[str]):
+        """加载已有记录，缺失的子目录标记为 0"""
         with self._lock:
             if self.file_path.exists():
                 self._data = json.loads(self.file_path.read_text())
-            for servant_id in servant_ids:
-                self._data.setdefault(str(servant_id), 0)
+            for dir_name in dir_names:
+                self._data.setdefault(dir_name, 0)
             self._save()
 
-    def get(self, servant_id: int) -> int:
+    def get(self, dir_name: str) -> int:
         with self._lock:
-            return self._data.get(str(servant_id), 0)
+            return self._data.get(dir_name, 0)
 
-    def set(self, servant_id: int, value: int):
+    def set(self, dir_name: str, value: int):
         """更新标记并持久化到磁盘（线程安全）"""
         with self._lock:
-            self._data[str(servant_id)] = value
+            self._data[dir_name] = value
             self._save()
 
     def _save(self):
@@ -117,7 +113,7 @@ class FeatureExtractor:
         # 从 torchvision.models 加载官方已经训练好的 ResNet18 模型
         self.model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
 
-        # 去掉最后的全连接层（FC 层）
+        # 去掉“最后的全连接层”（分类头）
         # 原始模型输出：1000 类 ImageNet 分类结果
         # 去掉后输出：512 维特征向量
         # list(model.children())[:-1] = 除了最后一层的所有层
@@ -189,11 +185,15 @@ def extract_dir(class_dir: Path, output_dir: Path, npz_labels_map: list[Servant]
     # x[i] 必须严格对应 y[i]
 
     dir_name = class_dir.name
-    # 根据 dir_name (从者ID) 在 npz_labels_map 中查找索引
-    servant_id = int(dir_name)
+    # 目录名可能形如 "1_1"，取第一段数字作为从者ID
+    dir_prefix = dir_name.split("_")[0]
+    if not dir_prefix.isdigit():
+        raise ValueError(f"目录名 {dir_name} 无法解析从者ID")
+    # 根据从者ID 在 npz_labels_map 中查找索引
+    servant_id = int(dir_prefix)
     label_idx = next((i for i, s in enumerate(npz_labels_map) if s.id == servant_id), -1)
     if label_idx == -1:
-        raise ValueError(f"从者ID {dir_name} 未找到")
+        raise ValueError(f"从者ID {dir_prefix} 未找到")
 
     for img_file in class_dir.iterdir():
         if img_file.is_file():
@@ -213,7 +213,6 @@ def extract_dir(class_dir: Path, output_dir: Path, npz_labels_map: list[Servant]
     test_values = extractor.extract_batch(test_paths, show_progress=True)
 
     # 缓存特征到磁盘（下次训练可以直接加载，跳过特征提取）
-    from main.config import TEMP_DIR
     np.savez(
         output_dir / f"{dir_name}.npz",
         train_values=train_values,  # 训练集特征
@@ -222,20 +221,39 @@ def extract_dir(class_dir: Path, output_dir: Path, npz_labels_map: list[Servant]
         test_labels=test_labels,  # 测试集标签
     )
     print(f"\n✓ {dir_name} 特征已缓存")
+    return dir_name
+
+
+def find_servant_dirs(images_dir: Path, servant_id: int) -> list[Path]:
+    """在 images_dir 中查找从者对应的所有子目录（目录名可能形如 "1_1"，以从者ID为前缀或后缀）"""
+    id_str = str(servant_id)
+    dirs = []
+    for entry in images_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        name = entry.name
+        if name == id_str or name.startswith(f"{id_str}_") or name.endswith(f"_{id_str}"):
+            dirs.append(entry)
+    return dirs
 
 
 def prepare_one(servant: Servant, record: RecordFile, images_dir: Path, output_path: Path, npz_labels_map: list[Servant]):
     if servant.revoke == 1:
         raise ValueError(f"从者ID {servant.id} 已标记为排除")
     else:
-        if record.get(servant.id) == 0:
-            dir_path = images_dir / f"{servant.id}"
-            if dir_path.exists():
+        dir_paths = find_servant_dirs(images_dir, servant.id)
+        if not dir_paths:
+            warnings.warn(f"不存在 {servant.id} {servant.name_cn}")
+            return
+        processed = []
+        for dir_path in dir_paths:
+            if record.get(dir_path.name) == 0:
                 print(f"正在处理 {servant.name_cn}")
-                extract_dir(dir_path, output_path, npz_labels_map)
-                record.set(servant.id, 1)
-            else:
-                warnings.warn(f"不存在 {servant.id} {servant.name_cn}")
+                dir_name = extract_dir(dir_path, output_path, npz_labels_map)
+                record.set(dir_name, 1)
+                processed.append(dir_name)
+        if processed:
+            print(f"\033[32m✓ 已提取 {', '.join(processed)}\033[0m")
         else:
             print(f"\033[33m跳过 已标记提取 {servant.name_cn}\033[0m")
 
@@ -314,13 +332,30 @@ def load_cached_features(output_dir: Path) -> tuple[np.ndarray, np.ndarray, np.n
     return train_X, train_y, test_X, test_y
 
 # 过滤掉无效从者后的映射表，使索引连续
-def create_label_map(servants: list[Servant], output_dir: Path):
+def create_label_map(dir_names: list[str], servants: list[Servant], output_dir: Path):
+    # 支持分组格式 "1" "1_1" => id 为 1
+    # 重新训练就删掉 label_map.json 和 train.json
     file_path = output_dir / "label_map.json"
     if not file_path.exists():
-        active_servants = [s for s in servants if s.revoke == 0]
-        text = json.dumps([s.to_dict() for s in active_servants], indent=4)
-        file_path.write_text(text)
-
+        json_list = []
+        seen_ids = set()
+        for dir_name in dir_names:
+            idx = dir_name.find('_')
+            if idx > 0:
+                id_part = dir_name[:idx]
+            else:
+                id_part = dir_name
+            id = int(id_part)
+            # 同一从者的多个目录（如 "1" 和 "1_1"）只登记一次，保证标签索引连续且不重复
+            if id in seen_ids:
+                continue
+            seen_ids.add(id)
+            servant = next((s for s in servants if s.id == id), None)
+            if servant is None:
+                raise ValueError(f"从者ID {id} 未找到")
+            json_list.append(servant.to_dict())
+        file_path.write_text(json.dumps(json_list, indent=4))
+        print(f"✓ 标签映射表已保存到 {file_path}")
     list_from_file = json.loads(file_path.read_text())
     return [Servant(**s) for s in list_from_file]
 
@@ -334,7 +369,7 @@ def train_model(output_path: Path, npz_labels_map: list[Servant]):
     print(f"\n使用 XGBoost 训练，device={device}")
 
     clf = XGBClassifier(
-        n_estimators=800,  # 决策树轮数（多分类实际树数 = 轮数 × 类别数）
+        n_estimators=300,  # 决策树轮数（多分类实际树数 = 轮数 × 类别数）
         max_depth=30,  # 限制树深度，防止过拟合 + 控制 ONNX 体积
         learning_rate=0.1,  # 学习率（步长收缩系数）
         subsample=0.8,  # 每棵树使用的样本比例（防止过拟合）
@@ -405,6 +440,7 @@ def export_to_onnx(clf: XGBClassifier, feature_dim: int, output_path: Path, mode
     return onnx_path
 
 
+# 转到 ONNX 格式（可选）
 def convert_saved_model_to_onnx(model_path: Path, output_path: Path, feature_dim: int = 512) -> Path:
     """独立转换入口：把已有的 xgboost_model.json 转成 ONNX，无需重新训练"""
     clf = XGBClassifier()
@@ -419,17 +455,32 @@ def train(images_dir: Path, output_path: Path, record_file_path: Path):
     if not output_path.exists():
         output_path.mkdir(parents=True)
 
+    # 小规模测试
+    servant_ids = [154,175,214,215,268,284,351,357,444]
+
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("select * from servants").fetchall()
+
+    if servant_ids is None or len(servant_ids) == 0:
+        rows = conn.execute("select * from servants").fetchall()
+    else:
+        rows = []
+        for id in servant_ids:
+            rows.append(conn.execute("select * from servants where id = ?", (id,)).fetchone())
+
     servants = [Servant(**dict(r)) for r in rows]
+
     conn.close()
 
-    npz_labels_map: list[Servant] = create_label_map(servants, output_path)
-
-    # train.json 全从者，用于记录哪些从者已提取特征
+    # train.json 全从者，用于记录哪些子目录已提取特征（以目录名为键）
     record = RecordFile(record_file_path)
-    record.load([s.id for s in servants])
+    dir_names = [d.name for d in images_dir.iterdir() if d.is_dir()] if images_dir.exists() else []
+    if servant_ids is not None and len(servant_ids) > 0:
+        dir_names = [d for d in dir_names if any(d.find(str(svt_id)) == 0 for svt_id in servant_ids)]
+    dir_names = sorted(dir_names)
+    record.load(dir_names)
+
+    npz_labels_map: list[Servant] = create_label_map(dir_names, servants, output_path)
 
     use_gpu = True
 
@@ -441,7 +492,7 @@ def train(images_dir: Path, output_path: Path, record_file_path: Path):
             prepare_one(servant, record, images_dir, output_path, npz_labels_map)
     else:
         # npz_labels_map[:n] 进行分批次提取
-        with ThreadPoolExecutor(max_workers=24 if DEVICE == 'cuda' else 24) as pool:
+        with ThreadPoolExecutor(max_workers=20 if DEVICE == 'cuda' else 20) as pool:
             promises = [
                 pool.submit(
                     prepare_one,
@@ -463,8 +514,27 @@ def train(images_dir: Path, output_path: Path, record_file_path: Path):
     train_model(output_path, npz_labels_map)
 
 if __name__ == '__main__':
-    IMAGES_DIR = Path("/mnt/DBC9-B465/temp")
-    # IMAGES_DIR = Path = Path("G:\\temp")
-    OUT_PUT_PATH = TEMP_DIR
-    RECORD_FILE_PATH = TEMP_DIR / "train.json"
+    parser = argparse.ArgumentParser(description="头像分类器特征提取与训练")
+    parser.add_argument(
+        "--images-dir",
+        type=Path,
+        default=None,
+        help="训练集图片根目录（每个从者一个子目录，如 1_1）",
+    )
+    parser.add_argument(
+        "--output-path",
+        type=Path,
+        default=None,
+        help="npz 特征缓存及模型输出目录",
+    )
+    args = parser.parse_args()
+
+    # Ubuntu 环境
+    # IMAGES_DIR = Path("/mnt/DBC9-B465/temp")
+    # Windows 环境
+    IMAGES_DIR = args.images_dir if args.images_dir is not None else Path("G:\\temp")
+    OUT_PUT_PATH = args.output_path if args.output_path is not None else TEMP_DIR / "grp01"
+    RECORD_FILE_PATH = OUT_PUT_PATH / "train.json"
+    print(f"图片目录: {IMAGES_DIR}")
+    print(f"输出目录: {OUT_PUT_PATH}")
     train(IMAGES_DIR, OUT_PUT_PATH, RECORD_FILE_PATH)
