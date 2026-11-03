@@ -211,6 +211,19 @@ def train(images_dir: Path, output_path: Path, record_file_path: Path):
     dir_names = [d.name for d in images_dir.iterdir() if d.is_dir()] if images_dir.exists() else []
     if servant_ids is not None and len(servant_ids) > 0:
         dir_names = [d for d in dir_names if any(d.find(str(svt_id)) == 0 for svt_id in servant_ids)]
+
+    # 过滤掉无效的从者的文件夹
+    next_dir_names = []
+    for dir_name in dir_names:
+        if dir_name.find("_") > 0:
+            svt_id = int(dir_name.split("_")[0])
+        else:
+            svt_id = int(dir_name)
+        svt = next((s for s in servants if s.id == svt_id), None)
+        if svt is not None and svt.revoke == 0:
+            next_dir_names.append(dir_name)
+    dir_names = next_dir_names
+
     dir_names = sorted(dir_names)
     record.load(dir_names)
 
