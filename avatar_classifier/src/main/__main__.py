@@ -549,51 +549,6 @@ def process_one_servant(svt, conn, img_mask_path, output_base_dir, res_dir, fg_d
                         out_dir=output_dir,
                         class_paths=class_paths,
                     ).output()
-                
-                    # ── 助战合成流程 ──
-                    # 背景图 L0 映射：card_rarity -> 助战框底图
-                    # frame_bg_map = {
-                    #     '金卡': fg_dir / '金助战框.png',
-                    #     '银卡': fg_dir / '银助战框.png',
-                    #     '铜卡': fg_dir / '铜助战框.png',
-                    #     '': fg_dir / '铁助战框.png',       # 黑卡 card_rarity 为空字符串
-                    #     '黑卡': fg_dir / '铁助战框.png',
-                    #     '冠位': fg_dir / '冠位助战框.png',
-                    # }
-                
-                    # 前景图序列：铜卡可升级为银卡和金卡，从当前稀有度开始取，一直到冠位
-                    # support_paths_for_card_rarity = {
-                    #     '铜卡': [
-                    #         {'name': '铜', 'support': [fg_dir / '铜助战框前景.png', fg_dir / '铜助战框前景2.png']},
-                    #         {'name': '银', 'support': [fg_dir / '银助战框前景.png', fg_dir / '银助战框前景2.png']},
-                    #         {'name': '金', 'support': [fg_dir / '金助战框前景.png', fg_dir / '金助战框前景2.png']},
-                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
-                    #     ],
-                    #     '银卡': [
-                    #         {'name': '银', 'support': [fg_dir / '银助战框前景.png', fg_dir / '银助战框前景2.png']},
-                    #         {'name': '金', 'support': [fg_dir / '金助战框前景.png', fg_dir / '金助战框前景2.png']},
-                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
-                    #     ],
-                    #     '金卡': [
-                    #         {'name': '金', 'support': [fg_dir / '金助战框前景.png', fg_dir / '金助战框前景2.png']},
-                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
-                    #     ],
-                    #     # 黑卡只有一张，不可升级
-                    #     '': [
-                    #         {'name': '铁', 'support': [fg_dir / '铁助战框前景.png', fg_dir / '铁助战框前景2.png']},
-                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
-                    #     ],
-                    #     '黑卡': [
-                    #         {'name': '铁', 'support': [fg_dir / '铁助战框前景.png', fg_dir / '铁助战框前景2.png']},
-                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
-                    #     ],
-                    #     '冠位': [
-                    #         {'name': '冠位', 'support': [fg_dir / '冠位助战框前景.png', fg_dir / '冠位助战框前景2.png']},
-                    #     ],
-                    # }
-                    #
-                    # output_dir = OUT_PUT_DIR / f"{svt['id']}" / 'support'
-                    # output_dir.mkdir(parents=True, exist_ok=True)
 
                     # 拍扁目录：将子目录中的文件移动到 output_dir，然后删除子目录
                     for sub in output_dir.iterdir():
