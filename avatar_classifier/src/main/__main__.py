@@ -1,4 +1,3 @@
-import csv
 import random
 import shutil
 import sqlite3
@@ -35,38 +34,26 @@ class Servant:
     get: str
     atk_max: int | None
     hp_max: int | None
+    revoke: int = 0
 
     @classmethod
-    def from_csv(cls, path: Path | None = None) -> list["Servant"]:
-        """从 servants.csv 读取所有 Servant 数据。"""
-        if path is None:
-            path = ROOT_DIR / "scripts" / "servants.csv"
-        with path.open(encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            return [
-                cls(
-                    id=int(row["id"]),
-                    name_cn=row["name_cn"],
-                    name_jp=row["name_jp"],
-                    name_en=row["name_en"],
-                    page_url=row["page_url"],
-                    avatar=row["avatar"],
-                    card_rarity=row["card_rarity"],
-                    servant_class=row["servant_class"],
-                    np_color=row["np_color"],
-                    np_type=row["np_type"],
-                    cards=row["cards"],
-                    faction=row["faction"],
-                    get=row["get"],
-                    atk_max=int(row["atk_max"]) if row["atk_max"] else None,
-                    hp_max=int(row["hp_max"]) if row["hp_max"] else None,
-                )
-                for row in reader
-            ]
+    def from_db(cls, db_path: Path | None = None) -> list["Servant"]:
+        """从 servants.db 读取所有 Servant 数据。"""
+        if db_path is None:
+            db_path = ROOT_DIR / "servants.db"
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            # 修改 sql 用于限制测试范围
+            # rows = conn.execute("select * from servants where id = 1").fetchall()
+            rows = conn.execute("select * from servants").fetchall()
+            return [cls(**dict(r)) for r in rows]
+        finally:
+            conn.close()
 
 
 def main():
-    servants = Servant.from_csv()
+    servants = Servant.from_db()
 
     # 单例测试
     # for s in servants[:1]:
@@ -85,9 +72,11 @@ def main():
 
                 match group:
                     case 'status':
+                        # print("跳过")
                         process_status_img_list(s, img_list)
                     case 'avatar':
-                       process_avatar_img_list(s, img_list)
+                        # print("跳过")
+                        process_avatar_img_list(s, img_list)
                     case _:
                         print(f"Unknown group: {group}")
 
@@ -184,19 +173,18 @@ def process_avatar_img_list(s: Servant, img_list: list[Path]):
         shutil.copy(avatar, OUT_PUT_DIR / f"{s.id}")
 
 
-def process_one_servant(svt, conn, img_mask_path, output_base_dir, res_dir, fg_dir):
+def process_one_servant(svt, avatar_infos, img_mask_path, output_base_dir, res_dir, fg_dir):
     """处理单个从者的头像生成，每个线程独立打开 img_mask。"""
     img_mask = Image.open(img_mask_path)
     try:
-        is_revoke = svt['revoke']
+        is_revoke = svt.revoke
 
         # 筛选出可以获取的从者条目
         if is_revoke == 0:
-            print(f"Processing {svt['id']} {svt['name_cn']} {svt['servant_class']}")
-            avatar_infos = conn.execute("SELECT * FROM avatar WHERE servant_id = ?", (int(svt['id']),)).fetchall()
+            print(f"Processing {svt.id} {svt.name_cn} {svt.servant_class}")
             for index, info in enumerate(avatar_infos):
                 img_file_name = info['file']
-                target_image_path = res_dir / "assets" / f"{svt['id']}" / img_file_name
+                target_image_path = res_dir / "assets" / f"{svt.id}" / img_file_name
                 img = Image.open(target_image_path).convert("RGBA")
 
                 left = int(info['left'])
@@ -258,7 +246,7 @@ def process_one_servant(svt, conn, img_mask_path, output_base_dir, res_dir, fg_d
                 # 生成 steps 个线性插值的缩放值，加上原始 1.0，共 steps + 1 个
                 scales = [min_scale + (max_scale - min_scale) * i / (steps - 1) for i in range(steps)] + [1.0]
 
-                output_dir = output_base_dir / f"{svt['id']}"
+                output_dir = output_base_dir / f"{svt.id}"
                 output_dir.mkdir(exist_ok=True)
                 img_width, img_height = img.size
 
@@ -290,16 +278,16 @@ def process_one_servant(svt, conn, img_mask_path, output_base_dir, res_dir, fg_d
                     img_clip = img.crop((s_left, s_top, s_right, s_bottom))
                     zoom_img_clip = img_clip.resize(img_mask.size)
 
-                    output_avatar_clip_path = output_dir / f"avatar_source_{svt['id']}_{index}_{scale_idx}.png"
+                    output_avatar_clip_path = output_dir / f"avatar_source_{svt.id}_{index}_{scale_idx}.png"
                     # 输出裁剪源
                     zoom_img_clip.save(output_avatar_clip_path)
 
                     # 裁剪源设置 alpha 通道
                     zoom_img_clip.putalpha(img_mask.convert("L"))
-                    output_avatar_clip_path = output_dir / f"avatar_input_{svt['id']}_{index}_{scale_idx}.png"
+                    output_avatar_clip_path = output_dir / f"avatar_input_{svt.id}_{index}_{scale_idx}.png"
                     zoom_img_clip.save(output_avatar_clip_path)
 
-                    card_rarity = svt['card_rarity']
+                    card_rarity = svt.card_rarity
 
                     default_frame_paths = [
                         {'name': '金', 'frame': fg_dir / 'L0_金框.png'},
@@ -488,7 +476,7 @@ def process_one_servant(svt, conn, img_mask_path, output_base_dir, res_dir, fg_d
                         stars_paths=stars_paths,
                     ).output()
 
-                    servant_class = svt['servant_class']
+                    servant_class = svt.servant_class
 
                     # 验证职阶是否在已知范围内
                     valid_classes = [
@@ -572,7 +560,14 @@ def process_character_img_list():
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
 
-    servants = conn.execute("select * from servants").fetchall()
+    servants = Servant.from_db()
+
+    # 一次性读取全部 avatar 数据并按 servant_id 分组，供各从者遍历复用
+    avatar_map: dict[int, list] = {}
+    for row in conn.execute("SELECT * FROM avatar").fetchall():
+        avatar_map.setdefault(int(row['servant_id']), []).append(row)
+
+    conn.close()
 
     # 使用多线程处理每个从者
     with ThreadPoolExecutor(max_workers=20) as pool:
@@ -580,7 +575,7 @@ def process_character_img_list():
             pool.submit(
                 process_one_servant,
                 svt,
-                conn,
+                avatar_map.get(int(svt.id), []),
                 AVATRT_MASK_IMG_PATH,
                 OUT_PUT_DIR,
                 RES_DIR,
@@ -593,8 +588,6 @@ def process_character_img_list():
                 future.result()
             except Exception as e:
                 print(f"处理从者时出错: {e}")
-
-    conn.close()
 
 
 if __name__ == '__main__':
