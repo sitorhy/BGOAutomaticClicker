@@ -5,8 +5,8 @@ import onnxruntime as ort
 from pathlib import Path
 from xgboost import XGBClassifier
 
-from main.config import RES_DIR, TEMP_DIR
-from main.train import FeatureExtractor
+from mooncell.config import RES_DIR, TEMP_DIR
+from mooncell.train import FeatureExtractor
 
 # 默认测试目录，可通过命令行参数 --test-input 覆盖
 TEST_INPUT_ROOT = RES_DIR / "test" / "grp01"

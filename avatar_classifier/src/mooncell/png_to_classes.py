@@ -10,10 +10,10 @@
     冠位助战徽标: 画布 170x400, 目标 76x76, 偏移 (0, 3)
 
 运行命令（项目根目录下执行）：
-    .venv/Scripts/python.exe -m main.png_to_classes --preset 徽标 --input-dir res/徽标 --out-dir res/foreground
-    .venv/Scripts/python.exe -m main.png_to_classes --preset 冠位徽标 --input-dir res/冠位徽标 --out-dir res/foreground
-    .venv/Scripts/python.exe -m main.png_to_classes --preset 助战徽标 --input-dir res/助战徽标 --out-dir res/foreground_support
-    .venv/Scripts/python.exe -m main.png_to_classes --preset 徽标 --input-dir res/徽标 --out-dir res/foreground --target 40x40 --offset 12,6
+    .venv/Scripts/python.exe -m mooncell.png_to_classes --preset 徽标 --input-dir res/徽标 --out-dir res/foreground
+    .venv/Scripts/python.exe -m mooncell.png_to_classes --preset 冠位徽标 --input-dir res/冠位徽标 --out-dir res/foreground
+    .venv/Scripts/python.exe -m mooncell.png_to_classes --preset 助战徽标 --input-dir res/助战徽标 --out-dir res/foreground_support
+    .venv/Scripts/python.exe -m mooncell.png_to_classes --preset 徽标 --input-dir res/徽标 --out-dir res/foreground --target 40x40 --offset 12,6
 """
 
 import argparse

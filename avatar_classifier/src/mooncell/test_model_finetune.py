@@ -7,15 +7,15 @@ import torch.nn as nn
 from PIL import Image
 from torchvision import models
 
-from main.config import RES_DIR, TEMP_DIR
-from main.test_model import (
+from mooncell.config import RES_DIR, TEMP_DIR
+from mooncell.test_model import (
     EXPECTED_MAP_FILE,
     evaluate_results,
     load_expected_map,
     load_label_map,
     print_results,
 )
-from main.train_finetune import DEVICE, FineTuneModel
+from mooncell.train_finetune import DEVICE, FineTuneModel
 
 # 默认测试目录，可通过命令行参数 --test-input 覆盖
 TEST_INPUT_ROOT = RES_DIR / "test" / "grp02"

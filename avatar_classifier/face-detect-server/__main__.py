@@ -6,7 +6,7 @@ import uvicorn
 
 # 确保同目录下的 database 模块可被导入
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-# 确保项目根目录可被导入，以便引用 src.main.detect_cv
+# 确保项目根目录可被导入，以便引用 src.mooncell.detect_cv
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image
@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from database import ServantDB
-from src.main.detect_cv import detect_anime_face, detect_avatar
+from src.mooncell.detect_cv import detect_anime_face, detect_avatar
 
 RES_DIR = Path(__file__).resolve().parent.parent / "res"
 

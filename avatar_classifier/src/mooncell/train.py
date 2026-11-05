@@ -15,7 +15,7 @@ from sklearn.model_selection import train_test_split
 from torchvision import models, transforms
 from xgboost import XGBClassifier
 
-from main.config import TEMP_DIR, ROOT_DIR
+from mooncell.config import TEMP_DIR, ROOT_DIR
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 IMAGE_SIZE = 224

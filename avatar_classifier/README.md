@@ -1,8 +1,8 @@
 ## 徽标 PNG 转图层
 生成徽标前景图层命令
 ```shell
-uv run python -m main.png_to_classes res/徽标 --out-dir res/foreground
-uv run python -m main.png_to_classes res/冠位徽标 --out-dir res/foreground
+uv run python -m mooncell.png_to_classes res/徽标 --out-dir res/foreground
+uv run python -m mooncell.png_to_classes res/冠位徽标 --out-dir res/foreground
 ```
 
 ## 前置工作简述（已执行）
@@ -17,7 +17,7 @@ uv run python -m main.png_to_classes res/冠位徽标 --out-dir res/foreground
 + 执行 png_to_classes 脚本生成 徽标 / 冠位徽标 前景图层
 + 执行 auto_detect 自动匹配头像范围，范围会写入 servants.db，有小概率是错的，需要人工校验
 + 运行 fact-detect-server / fact-detect-web 查看/校验/补充头像范围
-+ 执行 uv run pyton -m main 生成训练图
++ 执行 uv run pyton -m mooncell 生成训练图
 
 ## 微调通用步骤
 1. 加载在大数据集（ImageNet）上预训练好的权重作为起点，而不是随机初始化。

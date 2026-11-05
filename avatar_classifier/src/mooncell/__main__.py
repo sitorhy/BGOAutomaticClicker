@@ -9,8 +9,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from main.config import RES_DIR, ROOT_DIR, BG_DIR, TEMP_DIR
-from main.merge_chain import ClassifyChainNode, BackgroundChainNode, MergeChainNodeGroup, \
+from mooncell.config import RES_DIR, ROOT_DIR, BG_DIR, TEMP_DIR
+from mooncell.merge_chain import MooncellClassifyChainNode, BackgroundChainNode, MergeChainNodeGroup, \
     ExpandClipChainNode, LabelChainNode, StatusChainNode, StarsChainNode, ClassChainNode
 
 OUT_PUT_DIR = TEMP_DIR
@@ -45,8 +45,8 @@ class Servant:
         conn.row_factory = sqlite3.Row
         try:
             # 修改 sql 用于限制测试范围
-            # rows = conn.execute("select * from servants where id = 1").fetchall()
-            rows = conn.execute("select * from servants").fetchall()
+            rows = conn.execute("select * from servants where id = 1").fetchall()
+            # rows = conn.execute("select * from servants").fetchall()
             return [cls(**dict(r)) for r in rows]
         finally:
             conn.close()
@@ -63,7 +63,7 @@ def main():
         if servant_res_dir.exists():
             print(f"Servant {servant_id} res folder exists.")
             # 对资源突破进行分拣
-            classify_servant_res = ClassifyChainNode(input_dir=servant_res_dir).output()
+            classify_servant_res = MooncellClassifyChainNode(input_dir=servant_res_dir).output()
             for c in classify_servant_res:
                 # 分组
                 group = c.name

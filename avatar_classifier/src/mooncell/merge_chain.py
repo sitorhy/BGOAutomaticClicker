@@ -656,7 +656,7 @@ class ClassChainNode(MergeChainNode):
 
         return groups
 
-class ClassifyChainNode(MergeChainNode):
+class MooncellClassifyChainNode(MergeChainNode):
     """图片分类节点：扫描目录下的图片，根据尺寸进行分组。
 
     分组规则（SIZE_MAP）：

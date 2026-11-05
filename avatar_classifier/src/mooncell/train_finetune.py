@@ -11,8 +11,8 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
 
-from main.config import TEMP_DIR, ROOT_DIR
-from main.train import Servant, RecordFile, create_label_map
+from mooncell.config import TEMP_DIR, ROOT_DIR
+from mooncell.train import Servant, RecordFile, create_label_map
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 IMAGE_SIZE = 224

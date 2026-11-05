@@ -1,5 +1,5 @@
 [project]
-name = "main"
+name = "mooncell"
 version = "0.1.0"
 description = "训练集图片生成"
 authors = [

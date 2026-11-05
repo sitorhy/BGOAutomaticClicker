@@ -17,13 +17,13 @@ from .merge_chain import (
     StarsChainNode,
     ClassChainNode,
     NormalizeChainNode,
-    ClassifyChainNode,
+    MooncellClassifyChainNode,
 )
 from .config import RES_DIR, TEMP_DIR
 
 """
 测试用例
-.venv/Scripts/python.exe -m unittest main.test.TestUnit.test_avatar_detect
+.venv/Scripts/python.exe -m unittest mooncell.test.TestUnit.test_avatar_detect
 """
 
 
@@ -305,7 +305,7 @@ class TestUnit(unittest.TestCase):
     def test_classify_chain_node(self):
         """图片分类节点：按尺寸将目录中的图片分组为 status / avatar / character"""
         input_dir = RES_DIR / 'assets' / '1'
-        groups = ClassifyChainNode(input_dir=input_dir).output()
+        groups = MooncellClassifyChainNode(input_dir=input_dir).output()
 
         # 按分组名建立索引，便于断言
         groups_by_name = {g.name: g for g in groups}

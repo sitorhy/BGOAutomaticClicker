@@ -8,10 +8,10 @@ from pathlib import Path
 
 from PIL import Image
 
-from main.__main__ import Servant
-from main.config import RES_DIR, ROOT_DIR
-from main.detect_cv import detect_avatar
-from main.merge_chain import ClassifyChainNode
+from mooncell.__main__ import Servant
+from mooncell.config import RES_DIR, ROOT_DIR
+from mooncell.detect_cv import detect_avatar
+from mooncell.merge_chain import MooncellClassifyChainNode
 
 def main():
     servants = Servant.from_csv()
@@ -30,7 +30,7 @@ def main():
         if servant_res_dir.exists():
             # print(f"Servant {servant_id} res folder exists.")
             # 对资源突破进行分拣
-            classify_servant_res = ClassifyChainNode(input_dir=servant_res_dir).output()
+            classify_servant_res = MooncellClassifyChainNode(input_dir=servant_res_dir).output()
 
             avatar_group = next((i for i in classify_servant_res if i.name == 'avatar'), None)
 
