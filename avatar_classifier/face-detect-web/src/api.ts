@@ -23,8 +23,9 @@ export class ResourceService extends Service {
 
     @RequestMapping("/dir/{path}", "GET")
     @RequestParam("type", false)
+    @RequestParam("recursive", true)
     @PathVariables()
-    listDir(path: string, type: string = '') {
+    listDir(path: string, type: string = '', recursive: boolean = true) {
         return Expect<{
             "path": string;
             "entries": {
@@ -34,7 +35,8 @@ export class ResourceService extends Service {
             }[]
         }>({
             path,
-            type
+            type,
+            recursive
         });
     }
 }

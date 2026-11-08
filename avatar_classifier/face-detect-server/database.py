@@ -68,6 +68,9 @@ def _normalize_row(row: dict) -> dict:
         else:
             row[key] = None
 
+    if not "revoke" in row:
+        row["revoke"] = 0
+
     row["id"] = int(row["id"])
     return row
 

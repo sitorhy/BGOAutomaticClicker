@@ -32,28 +32,45 @@ app.add_middleware(
 
 
 @app.get("/dir/{path:path}")
-async def serve_res(path: str, type: str = 'character'):
+async def serve_res(path: str, type: str = 'character', recursive: bool = False):
     target = (RES_DIR / path).resolve()
 
+    if not target.exists():
+        return JSONResponse(content={"path": path, "entries": []})
+
     entries = []
-    for entry in sorted(target.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
-        if not entry.suffix in [".png", ".jpg", ".jpeg", ".bmp"]:
+    # 根据 recursive 参数选择遍历方式
+    if recursive:
+        # 递归遍历所有子目录
+        file_iterator = target.rglob('*')
+    else:
+        # 仅遍历当前目录
+        file_iterator = target.iterdir()
+    
+    for entry in sorted(file_iterator, key=lambda e: (not e.is_dir(), str(e).lower())):
+        if not entry.is_file():
+            continue
+        if not entry.suffix.lower() in [".png", ".jpg", ".jpeg", ".bmp"]:
             continue
         img = Image.open(entry)
         if type == 'avatar':
             # 筛选头像
-            if img.size[0] == 132 and img.size[1] == 144 or img.size[0] == 256 and img.size[1] == 256:
+            if img.size[0] == 132 and img.size[1] == 144 or img.size[0] == 256 and img.size[1] == 256 or img.size[0] == 128 and img.size[1] == 128:
+                # 计算相对于 target 的路径
+                rel_path = entry.relative_to(target)
                 entries.append({
-                    "name": entry.name,
-                    "type": "directory" if entry.is_dir() else "file",
-                    "size": entry.stat().st_size if entry.is_file() else None,
+                    "name": rel_path.as_posix(),
+                    "type": "file",
+                    "size": entry.stat().st_size,
                 })
         else:
             if img.size[0] == 512 and img.size[1] == 724:
+                # 计算相对于 target 的路径
+                rel_path = entry.relative_to(target)
                 entries.append({
-                    "name": entry.name,
-                    "type": "directory" if entry.is_dir() else "file",
-                    "size": entry.stat().st_size if entry.is_file() else None,
+                    "name": rel_path.as_posix(),
+                    "type": "file",
+                    "size": entry.stat().st_size,
                 })
     return JSONResponse(content={"path": path, "entries": entries})
 
@@ -71,6 +88,7 @@ async def serve_file(path: str, request: Request):
 # ── Servants HTTP 接口 ───────────────────────────────────
 
 
+# 导入从者基本数据到数据库（Mooncell格式）
 @app.post("/api/servants/import/json")
 async def import_servants_json(
         request: Request,
@@ -87,7 +105,7 @@ async def import_servants_json(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
+# 导入从者基本数据到数据库（Mooncell格式）
 @app.post("/api/servants/import/csv")
 async def import_servants_csv(
         request: Request,
