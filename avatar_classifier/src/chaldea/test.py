@@ -1,5 +1,7 @@
 import unittest
 
+from PIL import Image
+
 from chaldea.chain import (
     ChainNode,
     CharaClassifyChain,
@@ -9,6 +11,7 @@ from chaldea.chain import (
     ChaldeaJsonMerger,
     CharaFacePairer,
     AvatarDetectChain,
+    ExpandClipChain,
 )
 from chaldea.config import RES_DIR, TEMP_DIR
 
@@ -18,6 +21,32 @@ class TestUnit(unittest.TestCase):
         img_path = RES_DIR / "test" / "133019207_p0.jpg"
         node = ChainNode(img_path)
         node.save(TEMP_DIR / "output.png")
+
+    def test_expand_clip_chain(self):
+        chain = ExpandClipChain(
+            target_img=RES_DIR / "test" / "哈贝特洛特(Pretender)一破.png",
+            rect=(190, 139, 324, 285),
+            ratio=160 / 160,
+            min_scale=0.85,
+            max_scale=1.5,
+            steps=5,
+            output_dir=TEMP_DIR / "481",
+            mask_img=RES_DIR / "mask" / "BGO头像裁剪掩码.png",
+        )
+        nodes = chain.output()
+
+        print(f"\nExpandClipChain produced {len(nodes)} clips:")
+        for node in nodes:
+            print(f"  {node.image_path} size={node.image.size}")
+
+        self.assertGreater(len(nodes), 0)
+        self.assertLessEqual(len(nodes), 6)
+        with Image.open(RES_DIR / "mask" / "BGO头像裁剪掩码.png") as mask:
+            mask_size = mask.size
+        for node in nodes:
+            self.assertTrue(node.image_path.exists())
+            self.assertEqual(node.image.size, mask_size)
+            self.assertEqual(node.image.mode, "RGBA")
 
     def test_classify_chains(self):
         input_dir = RES_DIR / "assets" / "1"

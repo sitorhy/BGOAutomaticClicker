@@ -8,6 +8,8 @@ from typing import Union
 import numpy as np
 from PIL import Image
 
+from chaldea.config import TEMP_DIR
+
 
 ImageInput = Union[Path, np.ndarray, Image.Image]
 
@@ -145,6 +147,127 @@ class CommandsClassifyChain(Chain):
                 for img_path in subdir.iterdir():
                     if img_path.is_file() and img_path.suffix.lower() in {'.png', '.jpg', '.jpeg'}:
                         nodes.append(ChainNode(img_path))
+        return nodes
+
+
+class ExpandClipChain(Chain):
+    def __init__(
+            self,
+            target_img: Path,
+            rect: tuple[int, int, int, int],
+            ratio: float,
+            min_scale: float = 0.85,
+            max_scale: float = 1.5,
+            steps: int = 5,
+            output_dir: Path = TEMP_DIR,
+            mask_img: Path | None = None,
+    ):
+        super().__init__()
+        self.target_img = Path(target_img)
+        self.rect = rect
+        self.ratio = ratio
+        self.min_scale = min_scale
+        self.max_scale = max_scale
+        self.steps = steps
+        self.output_dir = Path(output_dir)
+        self.mask_img = Path(mask_img) if mask_img is not None else None
+
+    def _base_rect(self, img_size: tuple[int, int]) -> tuple[int, int, int, int]:
+        left, top, right, bottom = self.rect
+        width = right - left
+        height = bottom - top
+        current_ratio = width / height
+
+        cx = (left + right) / 2
+        cy = (top + bottom) / 2
+
+        # 沿中心向外扩展，使长宽比等于 ratio
+        if current_ratio > self.ratio:
+            new_height = width / self.ratio
+            new_left, new_right = left, right
+            new_top = cy - new_height / 2
+            new_bottom = cy + new_height / 2
+        elif current_ratio < self.ratio:
+            new_width = height * self.ratio
+            new_top, new_bottom = top, bottom
+            new_left = cx - new_width / 2
+            new_right = cx + new_width / 2
+        else:
+            new_left, new_top, new_right, new_bottom = left, top, right, bottom
+
+        return self._clamp_rect(new_left, new_top, new_right, new_bottom, img_size)
+
+    @staticmethod
+    def _clamp_rect(
+            left: float, top: float, right: float, bottom: float,
+            img_size: tuple[int, int],
+    ) -> tuple[int, int, int, int]:
+        img_width, img_height = img_size
+        # 范围尺寸不超过图片尺寸
+        width = min(right - left, img_width)
+        height = min(bottom - top, img_height)
+        cx = (left + right) / 2
+        cy = (top + bottom) / 2
+        left = cx - width / 2
+        right = cx + width / 2
+        top = cy - height / 2
+        bottom = cy + height / 2
+
+        # 超出图片范围时沿同维度平移回图片内
+        if left < 0:
+            right -= left
+            left = 0
+        if right > img_width:
+            left -= (right - img_width)
+            right = img_width
+        if top < 0:
+            bottom -= top
+            top = 0
+        if bottom > img_height:
+            top -= (bottom - img_height)
+            bottom = img_height
+
+        return int(left), int(top), int(right), int(bottom)
+
+    def output(self) -> list[ChainNode]:
+        img = Image.open(self.target_img).convert("RGBA")
+        base_rect = self._base_rect(img.size)
+        base_left, base_top, base_right, base_bottom = base_rect
+        base_width = base_right - base_left
+        base_height = base_bottom - base_top
+        base_cx = (base_left + base_right) / 2
+        base_cy = (base_top + base_bottom) / 2
+
+        # steps 个线性插值缩放值，加上基准 1.0，共 steps + 1 个
+        scales = [self.min_scale + (self.max_scale - self.min_scale) * i / (self.steps - 1)
+                  for i in range(self.steps)] + [1.0]
+
+        rects = []
+        for scale in scales:
+            scaled_width = base_width * scale
+            scaled_height = base_height * scale
+            rect = self._clamp_rect(
+                base_cx - scaled_width / 2,
+                base_cy - scaled_height / 2,
+                base_cx + scaled_width / 2,
+                base_cy + scaled_height / 2,
+                img.size,
+            )
+            if rect not in rects:
+                rects.append(rect)
+
+        mask = Image.open(self.mask_img).convert("L") if self.mask_img is not None else None
+
+        nodes = []
+        for idx, rect in enumerate(rects):
+            clip = img.crop(rect)
+            if mask is not None:
+                clip = clip.resize(mask.size, Image.Resampling.LANCZOS)
+                clip.putalpha(mask)
+            output_path = self.output_dir / f"{self.target_img.stem}_bg_{idx}.png"
+            node = ChainNode(clip)
+            node.save(output_path)
+            nodes.append(ChainNode(output_path))
         return nodes
 
 
