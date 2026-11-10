@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import json
+import random
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Union
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-from chaldea.config import TEMP_DIR
+from chaldea.config import BG_DIR, TEMP_DIR
 
 
 ImageInput = Union[Path, np.ndarray, Image.Image]
+
+YELLOW = "\033[93m"
+RESET = "\033[0m"
 
 
 class ChainNode:
@@ -150,6 +155,22 @@ class CommandsClassifyChain(Chain):
         return nodes
 
 
+class StatusClassifyChain(Chain):
+    def __init__(self, input_dir: Path):
+        super().__init__()
+        self.input_dir = Path(input_dir)
+
+    def output(self) -> list[ChainNode]:
+        nodes = []
+        for subdir_name in ["status/ascension", "status/costume"]:
+            subdir = self.input_dir / subdir_name
+            if subdir.exists() and subdir.is_dir():
+                for img_path in subdir.iterdir():
+                    if img_path.is_file() and img_path.suffix.lower() in {'.png', '.jpg', '.jpeg'}:
+                        nodes.append(ChainNode(img_path))
+        return nodes
+
+
 class ExpandClipChain(Chain):
     def __init__(
             self,
@@ -268,6 +289,482 @@ class ExpandClipChain(Chain):
             node = ChainNode(clip)
             node.save(output_path)
             nodes.append(ChainNode(output_path))
+        return nodes
+
+
+class OverlayChain(Chain):
+    """图层叠加链的公共骨架：输入图序列 × 叠加图层交叉合成后落盘。
+
+    子类实现 overlay_layers / output_name，按需覆写 prepare_target，
+    并用 layer_on_top / skip_existing 声明图层顺序与重复输出策略。
+    """
+
+    # 叠加图层在输入图之上；置 False 则作为背景垫在输入图下方
+    layer_on_top = True
+    # 输出文件已存在时跳过写图，仅复用其路径
+    skip_existing = False
+    # 本进程内各叠加链已写出的文件，用于发现跨链/跨图层的同名输出
+    _produced: set[Path] = set()
+
+    def __init__(self, input_nodes: list[ChainNode], output_dir: Path = TEMP_DIR):
+        super().__init__()
+        self.input_nodes = input_nodes
+        self.output_dir = Path(output_dir)
+
+    def prepare_target(self, target: Image.Image) -> Image.Image:
+        return target
+
+    def overlay_layers(self) -> list[Image.Image]:
+        raise NotImplementedError
+
+    def output_name(self, stem: str, layer_idx: int, target_idx: int) -> str:
+        raise NotImplementedError
+
+    def output(self) -> list[ChainNode]:
+        layers = self.overlay_layers()
+
+        nodes = []
+        for target_idx, node in enumerate(self.input_nodes):
+            target = self.prepare_target(node.image)
+            for layer_idx, layer in enumerate(layers):
+                top = layer.resize(target.size, Image.Resampling.LANCZOS)
+                if self.layer_on_top:
+                    result = Image.alpha_composite(target, top)
+                else:
+                    result = Image.alpha_composite(top, target)
+
+                output_path = self.output_dir / self.output_name(node.image_path.stem, layer_idx, target_idx)
+                if output_path in OverlayChain._produced:
+                    print(f"{YELLOW}输出文件重名，本次进程已写出过 {output_path}{RESET}")
+                OverlayChain._produced.add(output_path)
+
+                if self.skip_existing and output_path.exists():
+                    print(f"{YELLOW}跳过已存在的合成图 {output_path}{RESET}")
+                else:
+                    ChainNode(result).save(output_path)
+                nodes.append(ChainNode(output_path))
+        return nodes
+
+
+class FrameChain(OverlayChain):
+    layer_on_top = False
+
+    def __init__(
+            self,
+            name: str,
+            frame: Path,
+            expand_chain: list[ChainNode],
+            output_dir: Path = TEMP_DIR,
+            mask: Path | None = None,
+    ):
+        super().__init__(expand_chain, output_dir)
+        self.name = name
+        self.frame = Path(frame)
+        self.mask = Path(mask) if mask is not None else None
+
+    def prepare_target(self, target: Image.Image) -> Image.Image:
+        if self.mask is None or not self.mask.exists():
+            return target
+        mask = Image.open(self.mask).convert("L")
+        # resize 返回新对象，putalpha 不会污染输入节点缓存的原图
+        target = target.resize(mask.size, Image.Resampling.LANCZOS)
+        target.putalpha(mask)
+        return target
+
+    def overlay_layers(self) -> list[Image.Image]:
+        return [Image.open(self.frame).convert("RGBA")]
+
+    def output_name(self, stem: str, layer_idx: int, target_idx: int) -> str:
+        return f"{stem}_{self.name}_{target_idx}.png"
+
+
+class LabelChain(OverlayChain):
+    def __init__(
+            self,
+            frame_chain: list[ChainNode],
+            label_list: list[Path],
+            output_dir: Path = TEMP_DIR,
+    ):
+        super().__init__(frame_chain, output_dir)
+        self.label_list = [Path(p) for p in label_list]
+
+    def overlay_layers(self) -> list[Image.Image]:
+        return [Image.open(p).convert("RGBA") for p in self.label_list]
+
+    def output_name(self, stem: str, label_idx: int, target_idx: int) -> str:
+        return f"{stem}_label_{label_idx}_{target_idx}.png"
+
+
+class StatusChain(OverlayChain):
+    def __init__(
+            self,
+            label_chain: list[ChainNode],
+            status_list: list[Path],
+            output_dir: Path = TEMP_DIR,
+    ):
+        super().__init__(label_chain, output_dir)
+        self.status_list = [Path(p) for p in status_list]
+
+    def overlay_layers(self) -> list[Image.Image]:
+        return [Image.open(p).convert("RGBA") for p in self.status_list]
+
+    def output_name(self, stem: str, status_idx: int, target_idx: int) -> str:
+        return f"{stem}_status_{status_idx}_{target_idx}.png"
+
+
+class StarsChain(OverlayChain):
+    skip_existing = True
+
+    def __init__(
+            self,
+            status_chain: list[ChainNode],
+            output_dir: Path,
+            stars_list: list[Path],
+            rank_name: str,
+    ):
+        super().__init__(status_chain, output_dir)
+        self.stars_list = [Path(p) for p in stars_list]
+        self.rank_name = rank_name
+
+    def overlay_layers(self) -> list[Image.Image]:
+        return [Image.open(p).convert("RGBA") for p in self.stars_list]
+
+    def output_name(self, stem: str, stars_idx: int, target_idx: int) -> str:
+        return f"{stem}_stars_{self.rank_name}_{stars_idx}_{target_idx}.png"
+
+
+class ClassChain(OverlayChain):
+    def __init__(
+            self,
+            stars_chain: list[ChainNode],
+            class_list: list[Path],
+            class_name: str,
+            output_dir: Path = TEMP_DIR,
+    ):
+        super().__init__(stars_chain, output_dir)
+        self.class_list = [Path(p) for p in class_list]
+        self.class_name = class_name
+
+    def overlay_layers(self) -> list[Image.Image]:
+        return [Image.open(p).convert("RGBA") for p in self.class_list]
+
+    def output_name(self, stem: str, class_idx: int, target_idx: int) -> str:
+        return f"{stem}_{self.class_name}_{class_idx}_{target_idx}.png"
+
+
+class PostChain(Chain):
+    def __init__(self, chains: list[Chain]):
+        super().__init__()
+        self.chains = chains
+
+    def output(self) -> list[ChainNode]:
+        nodes = []
+        for chain in self.chains:
+            nodes.extend(chain.output())
+        return nodes
+
+
+class BackgroundClipChain(Chain):
+    """背景随机裁剪链：把 bg_dir 下每张原图随机裁出 output_size 大小的切片。
+
+    切片只留在内存里（ChainNode 持有图片对象），不落盘。
+    """
+
+    def __init__(self, bg_dir: Path = BG_DIR, output_size: tuple[int, int] = (280, 280)):
+        super().__init__()
+        self.bg_dir = Path(bg_dir)
+        self.output_size = output_size
+
+    def output(self) -> list[ChainNode]:
+        clip_w, clip_h = self.output_size
+        nodes = []
+        for bg_path in sorted(self.bg_dir.iterdir()):
+            if not bg_path.is_file() or bg_path.suffix.lower() not in {'.png', '.jpg', '.jpeg'}:
+                continue
+            with Image.open(bg_path) as bg_img:
+                if bg_img.width < clip_w or bg_img.height < clip_h:
+                    print(f"{YELLOW}背景图 {bg_path.name} 尺寸 {bg_img.size} 小于切片 {self.output_size}，跳过{RESET}")
+                    continue
+                left = random.randint(0, bg_img.width - clip_w)
+                top = random.randint(0, bg_img.height - clip_h)
+                tile = bg_img.crop((left, top, left + clip_w, top + clip_h)).convert("RGBA")
+            nodes.append(ChainNode(tile))
+        return nodes
+
+
+class FaceMixChain(Chain):
+    """背景混合链：状态图边缘高斯模糊后居中叠在背景切片上，弱化立绘的背景特征依赖。
+
+    画布大小以背景切片为准；前景先按 zoom 放大留出边缘模糊带，叠合时超出画布的部分被裁掉。
+    """
+
+    zoom: float = 1.5
+    blur_radius: int = 15
+    margin: int = 40
+
+    def __init__(
+            self,
+            status_nodes: list[ChainNode],
+            bg_nodes: list[ChainNode],
+            output_dir: Path = TEMP_DIR,
+            alpha: float = 0.95,
+    ):
+        super().__init__()
+        self.status_nodes = status_nodes
+        self.bg_nodes = bg_nodes
+        self.output_dir = Path(output_dir)
+        self.alpha = alpha
+
+    def _blur_edges(self, target: Image.Image) -> Image.Image:
+        """放大 target，把其边缘带替换成高斯模糊结果，中心保持清晰"""
+        zoom_w = max(1, round(target.width * self.zoom))
+        zoom_h = max(1, round(target.height * self.zoom))
+        left = (zoom_w - target.width) // 2
+        top = (zoom_h - target.height) // 2
+
+        canvas = Image.new("RGBA", (zoom_w, zoom_h), (255, 255, 255, 0))
+        canvas.alpha_composite(target, (left, top))
+
+        # “边缘白、中心黑”遮罩：Image.composite 在 mask=255 处取模糊图、mask=0 处取清晰图
+        mask = Image.new("L", (zoom_w, zoom_h), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rectangle([left, top, left + target.width, top + target.height], fill=255)
+        draw.rectangle(
+            [left + self.margin, top + self.margin,
+             left + target.width - self.margin, top + target.height - self.margin],
+            fill=0,
+        )
+        mask = mask.filter(ImageFilter.GaussianBlur(radius=self.margin / 2))
+
+        result = Image.composite(
+            canvas.filter(ImageFilter.GaussianBlur(radius=self.blur_radius)), canvas, mask
+        )
+
+        if self.alpha is not None and self.alpha < 1.0:
+            r, g, b, a = result.split()
+            a = a.point(lambda p: int(p * self.alpha))
+            result = Image.merge("RGBA", (r, g, b, a))
+        return result
+
+    def output(self) -> list[ChainNode]:
+        nodes = []
+        for target_idx, status_node in enumerate(self.status_nodes):
+            subject = self._blur_edges(status_node.image)
+            for bg_idx, bg_node in enumerate(self.bg_nodes):
+                # copy 后再叠加，避免污染被复用且带缓存的背景节点
+                canvas = bg_node.image.copy()
+                canvas.alpha_composite(subject, ((canvas.width - subject.width) // 2,
+                                                 (canvas.height - subject.height) // 2))
+
+                output_path = self.output_dir / f"{status_node.image_path.stem}_mesh_{bg_idx}_{target_idx}.png"
+                ChainNode(canvas).save(output_path)
+                nodes.append(ChainNode(output_path))
+        return nodes
+
+
+class CopyChain(Chain):
+    """文件复制链：把输入节点的图片文件原样复制到输出目录"""
+
+    def __init__(self, input_nodes: list[ChainNode], output_dir: Path = TEMP_DIR):
+        super().__init__()
+        self.input_nodes = input_nodes
+        self.output_dir = Path(output_dir)
+
+    def output(self) -> list[ChainNode]:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        nodes = []
+        for node in self.input_nodes:
+            output_path = self.output_dir / node.image_path.name
+            shutil.copy2(node.image_path, output_path)
+            nodes.append(ChainNode(output_path))
+        return nodes
+
+
+class NarrowFigureFrameChain(Chain):
+    """助战背景链：把立绘按 offset 落在 L0 背景画布上，画布尺寸以 L0 为准。
+
+    不能套 OverlayChain：OverlayChain 把图层 resize 到 target 尺寸，而这里要保留
+    立绘原始尺寸、只移动落点，缩放方向是反的。
+    """
+
+    def __init__(
+            self,
+            name: str,
+            frame: Path,
+            narrow_figure_chain: list[ChainNode],
+            output_dir: Path = TEMP_DIR,
+            offset: tuple[int, int] = (11, 12),
+            mask: Path | None = None,
+    ):
+        super().__init__()
+        self.name = name
+        self.frame = Path(frame)
+        self.narrow_figure_chain = narrow_figure_chain
+        self.output_dir = Path(output_dir)
+        self.offset = offset
+        self.mask = Path(mask) if mask is not None else None
+
+    def output(self) -> list[ChainNode]:
+        nodes = []
+        for target_idx, node in enumerate(self.narrow_figure_chain):
+            # 每张输出都从背景原图重新起一张画布，避免叠加互相污染
+            canvas = Image.open(self.frame).convert("RGBA")
+            canvas.alpha_composite(node.image, self.offset)
+
+            if self.mask is not None:
+                mask = Image.open(self.mask).convert("L")
+                if mask.size != canvas.size:
+                    mask = mask.resize(canvas.size, Image.Resampling.LANCZOS)
+                r, g, b, a = canvas.split()
+                canvas = Image.merge("RGBA", (r, g, b, ImageChops.multiply(a, mask)))
+
+            output_path = self.output_dir / f"{node.image_path.stem}_{self.name}_{target_idx}.png"
+            ChainNode(canvas).save(output_path)
+            nodes.append(ChainNode(output_path))
+        return nodes
+
+
+class NarrowFigureBorderChain(OverlayChain):
+    """助战边框链：L1 描边图层覆盖在卡面之上"""
+
+    def __init__(
+            self,
+            frame_chain: list[ChainNode],
+            border_list: list[Path],
+            output_dir: Path = TEMP_DIR,
+    ):
+        super().__init__(frame_chain, output_dir)
+        self.border_list = [Path(p) for p in border_list]
+
+    def overlay_layers(self) -> list[Image.Image]:
+        return [Image.open(p).convert("RGBA") for p in self.border_list]
+
+    def output_name(self, stem: str, layer_idx: int, target_idx: int) -> str:
+        return f"{stem}_border_{layer_idx}_{target_idx}.png"
+
+
+class NarrowFigureLabelChain(OverlayChain):
+    """助战标签链：L2 助战序号图层覆盖在卡面之上"""
+
+    def __init__(
+            self,
+            border_chain: list[ChainNode],
+            label_list: list[Path],
+            output_dir: Path = TEMP_DIR,
+    ):
+        super().__init__(border_chain, output_dir)
+        self.label_list = [Path(p) for p in label_list]
+
+    def overlay_layers(self) -> list[Image.Image]:
+        return [Image.open(p).convert("RGBA") for p in self.label_list]
+
+    def output_name(self, stem: str, layer_idx: int, target_idx: int) -> str:
+        return f"{stem}_label_{layer_idx}_{target_idx}.png"
+
+
+class NarrowFigureStarsChain(OverlayChain):
+    """助战星级链：L3 星级图层覆盖在卡面之上，rank_name 带出分路避免撞名"""
+
+    def __init__(
+            self,
+            label_chain: list[ChainNode],
+            stars_list: list[Path],
+            rank_name: str,
+            output_dir: Path = TEMP_DIR,
+    ):
+        super().__init__(label_chain, output_dir)
+        self.stars_list = [Path(p) for p in stars_list]
+        self.rank_name = rank_name
+
+    def overlay_layers(self) -> list[Image.Image]:
+        return [Image.open(p).convert("RGBA") for p in self.stars_list]
+
+    def output_name(self, stem: str, layer_idx: int, target_idx: int) -> str:
+        return f"{stem}_stars_{self.rank_name}_{layer_idx}_{target_idx}.png"
+
+
+class NarrowFigureClassChain(OverlayChain):
+    """助战职阶链：职阶徽标图层覆盖在卡面之上，为最终阶段产物"""
+
+    def __init__(
+            self,
+            stars_chain: list[ChainNode],
+            class_list: list[Path],
+            class_name: str,
+            output_dir: Path = TEMP_DIR,
+    ):
+        super().__init__(stars_chain, output_dir)
+        self.class_list = [Path(p) for p in class_list]
+        self.class_name = class_name
+
+    def overlay_layers(self) -> list[Image.Image]:
+        return [Image.open(p).convert("RGBA") for p in self.class_list]
+
+    def output_name(self, stem: str, layer_idx: int, target_idx: int) -> str:
+        return f"{stem}_{self.class_name}_{layer_idx}_{target_idx}.png"
+
+
+class NarrowFigureCraftChain(Chain):
+    """礼装合成链：在合成完成的助战卡面上，用随机背景切片盖住礼装位。
+
+    礼装位显示的是好友所带概念礼装，与本从者身份无关且不可控，
+    用随机背景遮掉，避免模型学到这块内容。切片按掩码画布尺寸裁剪，
+    掩码亮度直接作为切片 alpha，切片与卡面同为 170x400，直接对齐叠合。
+    """
+
+    def __init__(
+            self,
+            class_chain: list[ChainNode],
+            crop_mask: Path,
+            background_list: list[Path] | None = None,
+            size: int = 10,
+            output_dir: Path = TEMP_DIR,
+    ):
+        super().__init__()
+        self.class_chain = class_chain
+        self.crop_mask = Path(crop_mask)
+        self.background_list = background_list
+        self.size = size
+        self.output_dir = Path(output_dir)
+
+    def _tiles(self) -> list[Image.Image]:
+        """随机挑背景，按掩码画布尺寸裁一块并把掩码亮度设为 alpha"""
+        bg_paths = self.background_list
+        if bg_paths is None:
+            bg_paths = sorted(
+                p for p in BG_DIR.iterdir()
+                if p.is_file() and p.suffix.lower() in {'.png', '.jpg', '.jpeg'}
+            )
+        mask = Image.open(self.crop_mask)
+        mask_w, mask_h = mask.size
+
+        tiles = []
+        for bg_path in random.sample(list(bg_paths), min(self.size, len(bg_paths))):
+            with Image.open(bg_path) as bg_img:
+                bg_img = bg_img.convert("RGBA")
+                if bg_img.width < mask_w or bg_img.height < mask_h:
+                    scale = max(mask_w / bg_img.width, mask_h / bg_img.height)
+                    bg_img = bg_img.resize(
+                        (round(bg_img.width * scale), round(bg_img.height * scale)),
+                        Image.Resampling.LANCZOS)
+                left = random.randint(0, bg_img.width - mask_w)
+                top = random.randint(0, bg_img.height - mask_h)
+                tile = bg_img.crop((left, top, left + mask_w, top + mask_h))
+            tile.putalpha(mask.convert("L"))
+            tiles.append(tile)
+        return tiles
+
+    def output(self) -> list[ChainNode]:
+        tiles = self._tiles()
+        nodes = []
+        for target_idx, node in enumerate(self.class_chain):
+            for bg_idx, tile in enumerate(tiles):
+                # alpha_composite 返回新图，不污染卡面节点的缓存
+                canvas = Image.alpha_composite(node.image, tile)
+
+                output_path = self.output_dir / f"{node.image_path.stem}_craft_{bg_idx}_{target_idx}.png"
+                ChainNode(canvas).save(output_path)
+                nodes.append(ChainNode(output_path))
         return nodes
 
 

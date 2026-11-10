@@ -5,7 +5,7 @@ const HERE = import.meta.dirname;
 const CHALDEA_DIR = path.join(HERE, "..", "res", "chaldea");
 const OUT_ROOT = path.join(HERE, "..", "res", "assets");
 const STATUS_FILE = path.join(HERE, "download_status.json");
-const ASSET_TYPES = ["charaGraph", "faces", "narrowFigure", "commands"];
+const ASSET_TYPES = ["charaGraph", "faces", "narrowFigure", "commands", "status"];
 
 const args = process.argv.slice(2);
 const flags = new Set(args.filter((a) => a.startsWith("--")));
