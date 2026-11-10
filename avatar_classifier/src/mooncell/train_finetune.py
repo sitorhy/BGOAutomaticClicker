@@ -22,6 +22,7 @@ BATCH_SIZE = 32  # 训练批次大小，每轮次抽取 N 张图片进行训练
 EPOCHS = 10  # 训练 10 轮
 
 LR = 1e-4  # 学习率，超参数之一，简单说就是权重更新的激进程度
+WEIGHT_DECAY = 1e-4  # 权重衰减，AdamW 的 L2 系数
 
 
 class AvatarDataset(Dataset):
@@ -42,7 +43,7 @@ class AvatarDataset(Dataset):
 
 class FineTuneModel:
     # 这个无法用单例模式了
-    def __init__(self, num_classes: int):
+    def __init__(self, num_classes: int, lr: float = LR, weight_decay: float = WEIGHT_DECAY):
         # 从 torchvision.models 加载官方已经训练好的 ResNet18 模型
         self.model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
 
@@ -57,7 +58,7 @@ class FineTuneModel:
         # 学习率LR：权重更新的激进程度
         # weight_decay：权重衰减，AdamW优化器的参数，限制权重大小，权重太大微小的特征（噪音）会放大
         # 优化器收的是 model.parameters() —— 没有任何 requires_grad = False 冻结操作
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=LR, weight_decay=1e-4)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
 
         # 设为评估模式
         # 关闭 Dropout 和 BatchNorm 的训练行为，保证推理稳定
