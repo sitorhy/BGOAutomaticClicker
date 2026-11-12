@@ -25,13 +25,12 @@ from chaldea.chain import (
 from chaldea.composite import (
     CompositeRecord,
     Servant,
-    DB_PATH,
     YELLOW,
     RESET,
     _group_of,
     _servant_id_of,
 )
-from chaldea.config import RES_DIR, TEMP_DIR, BG_DIR
+from chaldea.config import RES_DIR, TEMP_DIR, BG_DIR, DB_PATH
 
 FG_DIR = RES_DIR / "foreground_support"
 CRAFT_MASK = RES_DIR / "mask" / "助战礼装位置掩码.png"

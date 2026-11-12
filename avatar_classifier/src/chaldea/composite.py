@@ -30,9 +30,8 @@ from chaldea.chain import (
     FaceMixChain,
     CopyChain, BackgroundChain,
 )
-from chaldea.config import BG_DIR, RES_DIR, ROOT_DIR, TEMP_DIR
+from chaldea.config import BG_DIR, DB_PATH, RES_DIR, TEMP_DIR
 
-DB_PATH = ROOT_DIR / "servants.db"
 FG_DIR = RES_DIR / "foreground"
 MASK_IMG = RES_DIR / "mask" / "BGO头像裁剪掩码.png"
 # 礼装位置掩码，其尺寸即礼装遮盖素材的输出尺寸

@@ -8,7 +8,7 @@
   头像素材与助战卡面混在一起训，不做文件名区分。
 + 超参全部走命令行，默认值与 train_finetune.py 一致；不再硬编码小规模 servant_ids。
 
-模型与数据管线复用 mooncell.train_finetune，ResNet 那套不在这里抄第二份。
+模型与数据管线在 chaldea.finetune，只依赖 torch/torchvision/Pillow，不牵连 mooncell。
 
 用法：
     python -m chaldea.train_finetune_full
@@ -24,12 +24,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
-from chaldea.composite import DB_PATH, Servant
-from chaldea.config import TEMP_DIR
-from mooncell.train_finetune import DEVICE, AvatarDataset, FineTuneModel
+from chaldea.composite import Servant
+from chaldea.config import DB_PATH, TEMP_DIR
+from chaldea.finetune import DEVICE, AvatarDataset, FineTuneModel
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif"}
 LABEL_MAP_FILE = "label_map.json"
@@ -147,7 +146,12 @@ def split_dir_images(
         files = rng.sample(files, max_per_dir)
     if len(files) < 2:
         return files, [], [label] * len(files), []
-    return train_test_split(files, [label] * len(files), test_size=test_size, random_state=random_state)
+    # 洗牌后按比例切分，顶替 sklearn 的 train_test_split；种子按目录名派生，重跑得到同一划分
+    shuffled = files[:]
+    random.Random(f"{dir_path.name}:{random_state}:split").shuffle(shuffled)
+    n_val = max(1, round(len(shuffled) * test_size))
+    train_files, val_files = shuffled[n_val:], shuffled[:n_val]
+    return train_files, val_files, [label] * len(train_files), [label] * len(val_files)
 
 
 def build_loaders(label_map: list[Servant], images_dir: Path, model: FineTuneModel, args) -> tuple[DataLoader, DataLoader]:
