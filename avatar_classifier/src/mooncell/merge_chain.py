@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
@@ -43,6 +42,16 @@ def parse_layer_image(template: Path | str | np.ndarray | None) -> np.ndarray | 
             nd_arr = cv2.cvtColor(nd_arr, cv2.COLOR_BGR2RGB)
         return nd_arr
     return None
+
+
+def layer_file_stem(template: Path | str) -> str:
+    """取图层路径的纯文件名 stem（既不含目录部分，也不含扩展名）。
+
+    Path(x).stem 会保留目录片段（Path("a/b/c.png").stem == "a/b/c"），这类片段与
+    目录拼接时，pathlib 会整体替换掉目标目录，导致输出跳出预期的 out_dir，
+    因此先取 name（纯文件名）再取 stem。
+    """
+    return Path(Path(str(template)).name).stem
 
 
 def merge_layers(layers: list[LayerSpec]):
@@ -242,7 +251,8 @@ class BackgroundChainNode(MergeChainNode):
             target_y = (ch - output.height) // 2
             canvas.alpha_composite(output, (target_x, target_y))
             
-            target_file_name = self.target_image_path.stem;
+            # 取纯文件名，避免带子目录的路径在拼接时跳出 out_dir
+            target_file_name = layer_file_stem(self.target_image_path)
             canvas_output_file_path = self.out_dir / f"{target_file_name}_bg_mesh_{i}.png"
             canvas.save(canvas_output_file_path)
             
@@ -251,9 +261,9 @@ class BackgroundChainNode(MergeChainNode):
 
 
 class AvatarClipChainNode(MergeChainNode):
-    steps = 10
-    min_scale = 0.8
-    max_scale = 1.5
+    steps = 5
+    min_scale = 0.65
+    max_scale = 1.6
     
 
     def __init__(self, input: list[MergeChainNodeGroup], target_image_path: Path, clip_mask: Path, out_dir: Path, output_size: tuple[int, int]):
@@ -426,7 +436,8 @@ class ExpandClipChainNode(MergeChainNode):
                         'template': avatar_foreground_path,
                     }
                 ])
-                out_path = frame_dir / os.path.basename(avatar_foreground_path)
+                # 文件名追加分组名，避免拍扁目录后各分组之间同名互相覆盖
+                out_path = frame_dir / f"{layer_file_stem(avatar_foreground_path)}_{frame['name']}.png"
                 canvas.save(out_path)
                 # 以刚保存的图片路径作为图层 template
                 layers.append({'template': out_path})
@@ -472,7 +483,7 @@ class LabelChainNode(MergeChainNode):
                         {'template': avatar_path},
                         {'template': label_path, 'fit': 'fill'},
                     ])
-                    out_path = group_dir / f"{Path(str(avatar_path)).stem}_label{label_index}.png"
+                    out_path = group_dir / f"{layer_file_stem(avatar_path)}_label{label_index}.png"
                     canvas.save(out_path)
                     new_layers.append({'template': out_path})
 
@@ -528,7 +539,7 @@ class StatusChainNode(MergeChainNode):
                         {'template': avatar_path},
                         {'template': marker_path, 'fit': 'fill'},
                     ])
-                    out_path = group_dir / f"{Path(str(avatar_path)).stem}_status{marker_index}.png"
+                    out_path = group_dir / f"{layer_file_stem(avatar_path)}_status{marker_index}.png"
                     canvas.save(out_path)
                     new_layers.append({'template': out_path})
 
@@ -584,7 +595,7 @@ class StarsChainNode(MergeChainNode):
                         {'template': avatar_path},
                         {'template': marker_path, 'fit': 'fill'},
                     ])
-                    out_path = group_dir / f"{Path(str(avatar_path)).stem}_stars{marker_index}.png"
+                    out_path = group_dir / f"{layer_file_stem(avatar_path)}_stars{marker_index}.png"
                     canvas.save(out_path)
                     new_layers.append({'template': out_path})
 
@@ -640,7 +651,7 @@ class ClassChainNode(MergeChainNode):
                         {'template': avatar_path},
                         {'template': marker_path, 'fit': 'fill'},
                     ])
-                    out_path = group_dir / f"{Path(str(avatar_path)).stem}_class{marker_index}.png"
+                    out_path = group_dir / f"{layer_file_stem(avatar_path)}_class{marker_index}.png"
                     canvas.save(out_path)
                     new_layers.append({'template': out_path})
 
@@ -720,6 +731,46 @@ class MooncellClassifyChainNode(MergeChainNode):
 
         return result
 
+class ExpandCropChainNode(MergeChainNode):
+    def __init__(self, input: list[MergeChainNodeGroup], bg_cropped_list: list[Path], mask: Path, out_dir: Path):
+        super().__init__(input=input)
+        self.mask = mask
+        self.out_dir = out_dir
+        self.bg_cropped_list = bg_cropped_list
+
+    def output(self) -> list[MergeChainNodeGroup]:
+        mask_img = Image.open(self.mask).convert("L")
+        root = self.out_dir
+
+        groups: list[MergeChainNodeGroup] = []
+
+        for group in self.input:
+            group_dir = root / group.name
+            group_dir.mkdir(parents=True, exist_ok=True)
+
+            # 每个分组独立收集图层，避免与其他分组共用同一个列表而不断累积
+            new_layers: list[LayerSpec] = []
+
+            for i, bg_cropped in enumerate(self.bg_cropped_list):
+                bg_alpha = Image.open(bg_cropped).convert("RGBA").copy()
+                bg_alpha.putalpha(mask_img)
+
+                for j, layer in enumerate(group.layers):
+                    img_path: Path = layer.get('template')
+                    img = Image.open(img_path).convert("RGBA")
+                    if img.size != mask_img.size:
+                        img = img.resize(mask_img.size)
+                    img.paste(bg_alpha, (0, 0), mask_img)
+                    out_path = group_dir / f"{layer_file_stem(img_path)}_{i}_{j}_crop.png"
+                    img.save(out_path)
+
+                    new_layers.append({'template': out_path})
+
+            # 背景遍历结束后再输出分组，分组数量与输入保持一致
+            groups.append(MergeChainNodeGroup(name=group.name, layers=new_layers))
+
+        return groups
+
 
 class NormalizeChainNode(MergeChainNode):
     def __init__(self, input: list[MergeChainNodeGroup], out_dir: Path, output_size: tuple[int, int], background_color: tuple[int, int, int, int] = (0, 0, 0, 255), delete_old: bool = False):
@@ -765,7 +816,7 @@ class NormalizeChainNode(MergeChainNode):
                 # 第 3 个参数传入 img 自身作为 mask，保留透明区域不被覆盖
                 canvas.paste(img, offset, img)
 
-                out_path = group_dir / f"{Path(str(img_path)).stem}_normalized.png"
+                out_path = group_dir / f"{layer_file_stem(img_path)}_normalized.png"
                 print(f"保存图片: {out_path}")
                 canvas.save(out_path)
                 new_layers.append({'template': out_path})

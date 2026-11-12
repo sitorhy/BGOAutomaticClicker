@@ -190,7 +190,8 @@ def train(images_dir: Path, output_path: Path, record_file_path: Path):
         output_path.mkdir(parents=True)
 
     # 小规模测试
-    servant_ids = [154, 175, 214, 215, 268, 284, 351, 357, 444]
+    #servant_ids = [154, 175, 214, 215, 268, 284, 351, 357, 444]
+    servant_ids = [154,175,214,215,268,284,351,357,444,118,141,17,2,241,253,257,29,30,331,96]
 
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -305,7 +306,7 @@ if __name__ == '__main__':
     # Ubuntu 环境
     # IMAGES_DIR = Path("/mnt/DBC9-B465/temp")
     # Windows 环境
-    IMAGES_DIR = args.images_dir if args.images_dir is not None else Path("G:\\temp")
+    IMAGES_DIR = args.images_dir if args.images_dir is not None else TEMP_DIR
     OUT_PUT_PATH = args.output_path if args.output_path is not None else TEMP_DIR / "grp01_finetune"
     RECORD_FILE_PATH = OUT_PUT_PATH / "train.json"
     print(f"图片目录: {IMAGES_DIR}")

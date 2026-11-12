@@ -11,10 +11,11 @@ from PIL import Image
 
 from mooncell.config import RES_DIR, ROOT_DIR, BG_DIR, TEMP_DIR
 from mooncell.merge_chain import MooncellClassifyChainNode, BackgroundChainNode, MergeChainNodeGroup, \
-    ExpandClipChainNode, LabelChainNode, StatusChainNode, StarsChainNode, ClassChainNode
+    ExpandClipChainNode, LabelChainNode, StatusChainNode, StarsChainNode, ClassChainNode, ExpandCropChainNode
 
-OUT_PUT_DIR = TEMP_DIR
+OUT_PUT_DIR = Path("G:\\temp")# TEMP_DIR
 OUT_PUT_DIR.mkdir(exist_ok=True)
+INPUT_DIR = Path("G:\\res") # RES_DIR
 
 
 @dataclass
@@ -45,7 +46,7 @@ class Servant:
         conn.row_factory = sqlite3.Row
         try:
             # 修改 sql 用于限制测试范围
-            rows = conn.execute("select * from servants where id = 1").fetchall()
+            rows = conn.execute("select * from servants where id in (154,175,214,215,268,284,351,357,444,118,141,17,2,241,253,257,29,30,331,96)").fetchall()
             # rows = conn.execute("select * from servants").fetchall()
             return [cls(**dict(r)) for r in rows]
         finally:
@@ -59,7 +60,7 @@ def main():
     # for s in servants[:1]:
     for s in servants:
         servant_id = s.id
-        servant_res_dir = RES_DIR / "assets" / str(servant_id)
+        servant_res_dir = INPUT_DIR / "assets" / str(servant_id)
         if servant_res_dir.exists():
             print(f"Servant {servant_id} res folder exists.")
             # 对资源突破进行分拣
@@ -100,22 +101,13 @@ def process_one_status_image(target_image_path, bg_cropped_list, output_dir, out
                 ]
             )
         ],
-        alpha=0.92,
+        alpha=0.8,
         target_image_path=target_image_path,
         out_dir=output_dir,
         output_size=output_size,
     ).output()
 
-
-def process_status_img_list(s: Servant, img_list: list[Path]):
-    """
-    背景融合
-    降低立绘背景的特征依赖
-    默认背景图尺寸大于 output_size, 比输入图片略大即可
-    过大的背景图没有意义，还会报 DecompressionBombWarning:
-    """
-    output_size = (280, 280)
-
+def create_background_clip_list(output_size: (int, int), s: Servant):
     # 单例测试
     # bg_img_list = listdir(BG_DIR)[-6:-5]
     bg_img_list = listdir(BG_DIR)
@@ -139,6 +131,23 @@ def process_status_img_list(s: Servant, img_list: list[Path]):
         print(f"保存背景图 {tmp_cropped_bg_path}")
 
         bg_cropped_list.append(tmp_cropped_bg_path)
+
+    return bg_cropped_list
+
+def process_status_img_list(s: Servant, img_list: list[Path]):
+    """
+    背景融合
+    降低立绘背景的特征依赖
+    默认背景图尺寸大于 output_size, 比输入图片略大即可
+    过大的背景图没有意义，还会报 DecompressionBombWarning:
+    """
+    output_size = (280, 280)
+
+    # 单例测试
+    # bg_img_list = listdir(BG_DIR)[-6:-5]
+    # bg_img_list = listdir(BG_DIR)
+
+    bg_cropped_list = create_background_clip_list(output_size, s)
 
     output_dir = OUT_PUT_DIR / f"{s.id}"
     output_dir.mkdir(exist_ok=True)
@@ -239,9 +248,9 @@ def process_one_servant(svt, avatar_infos, img_mask_path, output_base_dir, res_d
                 base_cx = (base_left + base_right) / 2
                 base_cy = (base_top + base_bottom) / 2
 
-                min_scale = 0.8
+                min_scale = 0.65
                 max_scale = 1.5
-                steps = 5
+                steps = 3
 
                 # 生成 steps 个线性插值的缩放值，加上原始 1.0，共 steps + 1 个
                 scales = [min_scale + (max_scale - min_scale) * i / (steps - 1) for i in range(steps)] + [1.0]
@@ -324,6 +333,26 @@ def process_one_servant(svt, avatar_infos, img_mask_path, output_base_dir, res_d
                         frame_paths = frame_paths_for_card_rarity[card_rarity]
                     else:
                         frame_paths = default_frame_paths
+
+                    bg_cropped_list: list[Path] = create_background_clip_list((160, 160), svt)
+                    ExpandCropChainNode(
+                        input=[
+                            MergeChainNodeGroup(
+                                name='default',
+                                layers=[
+                                    {
+                                        'template': output_avatar_clip_path,
+                                    }
+                                ]
+                            )
+                        ],
+                        out_dir=output_dir,
+                        mask=RES_DIR / "mask" / "礼装位置掩码.png",
+                        bg_cropped_list=bg_cropped_list
+                    ).output()
+
+                    for bg_cropped in bg_cropped_list:
+                        bg_cropped.unlink(missing_ok=True)
 
                     expand_chain_node_output = ExpandClipChainNode(
                         input=[
@@ -564,7 +593,8 @@ def process_character_img_list():
 
     # 一次性读取全部 avatar 数据并按 servant_id 分组，供各从者遍历复用
     avatar_map: dict[int, list] = {}
-    for row in conn.execute("SELECT * FROM avatar").fetchall():
+    # not like 排除 chaldea 版本的立绘
+    for row in conn.execute("SELECT * FROM avatar where file not like '%/%'").fetchall():
         avatar_map.setdefault(int(row['servant_id']), []).append(row)
 
     conn.close()
@@ -578,7 +608,7 @@ def process_character_img_list():
                 avatar_map.get(int(svt.id), []),
                 AVATRT_MASK_IMG_PATH,
                 OUT_PUT_DIR,
-                RES_DIR,
+                INPUT_DIR,
                 fg_dir
             )
             for svt in servants

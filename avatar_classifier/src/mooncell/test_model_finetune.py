@@ -18,7 +18,7 @@ from mooncell.test_model import (
 from mooncell.train_finetune import DEVICE, FineTuneModel
 
 # 默认测试目录，可通过命令行参数 --test-input 覆盖
-TEST_INPUT_ROOT = RES_DIR / "test" / "grp02"
+TEST_INPUT_ROOT = RES_DIR / "test" / "grp01"
 
 # 默认模型目录（存放 label_map.json / finetuned_resnet18.pth），可通过命令行参数 --model-root 覆盖
 MODEL_ROOT = TEMP_DIR / "grp01_finetune"
