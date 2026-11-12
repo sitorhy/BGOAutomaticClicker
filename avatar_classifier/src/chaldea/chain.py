@@ -10,13 +10,16 @@ from typing import Union
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-from chaldea.config import BG_DIR, TEMP_DIR
+from chaldea.config import BG_DIR, RES_DIR, TEMP_DIR
 
 
 ImageInput = Union[Path, np.ndarray, Image.Image]
 
 YELLOW = "\033[93m"
 RESET = "\033[0m"
+
+# 头像裁剪掩码，头像类素材默认按它设置透明通道
+AVATAR_MASK_IMG = RES_DIR / "mask" / "BGO头像裁剪掩码.png"
 
 
 class ChainNode:
@@ -48,6 +51,11 @@ class ChainNode:
         if self._image is None:
             self._image = Image.open(self._image_path).convert("RGBA")
         return self._image
+
+    @image.setter
+    def image(self, value: ImageInput) -> None:
+        # 原地覆盖内存图（统一转 RGBA），image_path 仍指向原始文件不变
+        self._image = self._to_image(value).convert("RGBA")
 
     @property
     def alpha_mask(self) -> Image.Image | None:
@@ -89,6 +97,21 @@ class Chain:
 
     def output(self) -> list[ChainNode]:
         return self.nodes
+
+# 删除输入的序列文件
+class UnlinkChain(Chain):
+    def __init__(self, nodes: list[ChainNode]):
+        super().__init__(nodes)
+
+    def output(self) -> list[ChainNode]:
+        for node in self.nodes:
+            if node.image_path is not None and isinstance(node.image_path, Path):
+                node.image_path.unlink(missing_ok=True)
+        self.nodes = []
+        return []
+
+
+
 
 
 class CharaClassifyChain(Chain):
@@ -492,10 +515,38 @@ class BackgroundClipChain(Chain):
         return nodes
 
 
+class BackgroundChain(Chain):
+    """随机背景链：为 chain 里每张图随机挑一张背景切片垫在其后方，覆盖写回 node.image。
+
+    画布尺寸以 node.image 为准：背景切片 resize 到该尺寸铺满底层，node.image 保持原始
+    尺寸与透明通道叠在背景之上，因此只有它的透明区域会露出背景。结果原地覆盖，
+    方便后续链直接复用同一批节点。
+    """
+
+    def __init__(self, bg_nodes: list[ChainNode], chain: list[ChainNode]):
+        super().__init__()
+        self.bg_nodes = bg_nodes
+        self.chain = chain
+
+    def output(self) -> list[ChainNode]:
+        if not self.bg_nodes:
+            print(f"{YELLOW}BackgroundChain 无可用背景切片，跳过{RESET}")
+            return self.chain
+        for node in self.chain:
+            fg = node.image
+            # resize 返回新图，不会污染被复用且带缓存的背景节点
+            bg = random.choice(self.bg_nodes).image.resize(fg.size, Image.Resampling.LANCZOS)
+            node.image = Image.alpha_composite(bg, fg)
+            node.image.save(node.image_path)
+        return self.chain
+
+
 class FaceMixChain(Chain):
     """背景混合链：状态图边缘高斯模糊后居中叠在背景切片上，弱化立绘的背景特征依赖。
 
     画布大小以背景切片为准；前景先按 zoom 放大留出边缘模糊带，叠合时超出画布的部分被裁掉。
+    每次叠合再对 subject 施加 scale_range 内的随机缩放和 offset_range 内的随机偏移，
+    增强位置与尺度扰动（offset_range=0、scale_range=(1,1) 时退化为纯居中叠加）。
     """
 
     zoom: float = 1.5
@@ -507,13 +558,18 @@ class FaceMixChain(Chain):
             status_nodes: list[ChainNode],
             bg_nodes: list[ChainNode],
             output_dir: Path = TEMP_DIR,
-            alpha: float = 0.95,
+            alpha: float = 0.92,
+            scale_range: tuple[float, float] = (1.0, 1.5),
+            offset_range: int = 20,
     ):
         super().__init__()
         self.status_nodes = status_nodes
         self.bg_nodes = bg_nodes
         self.output_dir = Path(output_dir)
         self.alpha = alpha
+        # 合成 subject 时的随机缩放区间与随机偏移像素半径（0 表示不偏移）
+        self.scale_range = scale_range
+        self.offset_range = offset_range
 
     def _blur_edges(self, target: Image.Image) -> Image.Image:
         """放大 target，把其边缘带替换成高斯模糊结果，中心保持清晰"""
@@ -546,20 +602,80 @@ class FaceMixChain(Chain):
             result = Image.merge("RGBA", (r, g, b, a))
         return result
 
+    def _random_scale(self, target: Image.Image) -> Image.Image:
+        """在 scale_range 内随机取一个比例缩放 target，比例恒为 1 时原样返回"""
+        lo, hi = self.scale_range
+        if lo == hi == 1.0:
+            return target
+        scale = random.uniform(lo, hi)
+        size = (max(1, round(target.width * scale)), max(1, round(target.height * scale)))
+        return target.resize(size, Image.Resampling.LANCZOS)
+
     def output(self) -> list[ChainNode]:
         nodes = []
         for target_idx, status_node in enumerate(self.status_nodes):
-            subject = self._blur_edges(status_node.image)
+            base_subject = self._blur_edges(status_node.image)
             for bg_idx, bg_node in enumerate(self.bg_nodes):
                 # copy 后再叠加，避免污染被复用且带缓存的背景节点
                 canvas = bg_node.image.copy()
-                canvas.alpha_composite(subject, ((canvas.width - subject.width) // 2,
-                                                 (canvas.height - subject.height) // 2))
+                # 每次合成都随机缩放 subject，居中后再叠加随机偏移，超出画布的部分被裁掉
+                subject = self._random_scale(base_subject)
+                offset_x = (canvas.width - subject.width) // 2
+                offset_y = (canvas.height - subject.height) // 2
+                if self.offset_range > 0:
+                    offset_x += random.randint(-self.offset_range, self.offset_range)
+                    offset_y += random.randint(-self.offset_range, self.offset_range)
+                canvas.alpha_composite(subject, (offset_x, offset_y))
 
                 output_path = self.output_dir / f"{status_node.image_path.stem}_mesh_{bg_idx}_{target_idx}.png"
                 ChainNode(canvas).save(output_path)
                 nodes.append(ChainNode(output_path))
         return nodes
+
+
+class ExpandCropChain(Chain):
+    """礼装位遮盖链：把头像裁剪图的礼装位替换成随机背景切片。
+
+    礼装位显示的是好友所带概念礼装，与本从者身份无关且不可控，整块盖掉避免模型学到
+    这块内容。产物是孤立的训练素材，不再作为后续叠加链的输入。
+    两张掩码分工不同：bg_mask_img 圈出礼装位，只决定背景切片盖哪里；
+    mask_img 决定产物自身的透明通道，即头像的裁剪形状。
+    输出尺寸以 bg_mask_img 为准，背景切片和裁剪图都先对齐到该尺寸，调用方无需预处理。
+    """
+
+    def __init__(
+            self,
+            frame_chain: list[ChainNode],
+            bg_mask_img: Path,
+            bg_nodes: list[ChainNode]
+    ):
+        super().__init__()
+        self.frame_chain = frame_chain
+        self.bg_mask_img = Path(bg_mask_img)
+        self.bg_nodes = bg_nodes
+
+    def output(self) -> list[ChainNode]:
+        bg_mask = Image.open(self.bg_mask_img).convert("L")
+
+        # 再原图的基础上修改
+        for target_idx, frame_node in enumerate(self.frame_chain):
+            # 模拟外围背景
+            bg_index = random.randint(0, len(self.bg_nodes) - 1)
+
+            # 模拟礼装
+            bg_clip_index = random.randint(0, len(self.bg_nodes) - 1)
+
+            bg_img = self.bg_nodes[bg_index].image.copy()
+            bg_clip = self.bg_nodes[bg_clip_index].image.copy()
+            bg_clip.putalpha(bg_mask)
+
+            # 叠加
+            bg_img.paste(frame_node.image, (0,0), frame_node.image)
+            bg_img.paste(bg_clip, (0,0), bg_clip)
+            if frame_node.image_path is not None:
+                bg_img.save(frame_node.image_path)
+
+        return self.frame_chain
 
 
 class CopyChain(Chain):

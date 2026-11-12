@@ -1,8 +1,8 @@
 """合成流水线主体：按 src/chaldea/合成流水线.md 批量产出训练素材。
 
 单个从者目录的处理链路为 立绘 -> ExpandClipChain 裁剪 -> Frame/Label/Status/
-Stars/Class 五段叠加 -> PostChain 汇总 -> FaceMixChain 背景混合 -> CopyChain 头像复制，
-目录之间按 dir_name 并行。
+Stars/Class 五段叠加（Class 直接在分路内 output 汇入素材）-> FaceMixChain 背景混合 -> CopyChain 头像复制，
+裁剪结果另走一路 ExpandCropChain 礼装遮盖，目录之间按 dir_name 并行。
 """
 import json
 import sqlite3
@@ -19,24 +19,26 @@ from chaldea.chain import (
     CharaClassifyChain,
     FaceClassifyChain,
     ExpandClipChain,
+    ExpandCropChain,
     FrameChain,
     LabelChain,
     StatusChain,
     StarsChain,
     ClassChain,
-    PostChain,
     StatusClassifyChain,
     BackgroundClipChain,
     FaceMixChain,
-    CopyChain,
+    CopyChain, BackgroundChain,
 )
 from chaldea.config import BG_DIR, RES_DIR, ROOT_DIR, TEMP_DIR
 
 DB_PATH = ROOT_DIR / "servants.db"
 FG_DIR = RES_DIR / "foreground"
 MASK_IMG = RES_DIR / "mask" / "BGO头像裁剪掩码.png"
+# 礼装位置掩码，其尺寸即礼装遮盖素材的输出尺寸
+CRAFT_MASK_IMG = RES_DIR / "mask" / "礼装位置掩码.png"
 
-MIN_SCALE = 0.85
+MIN_SCALE = 0.65
 MAX_SCALE = 1.5
 STEPS = 3
 
@@ -254,8 +256,8 @@ def _process_work_dir(
     avatars: dict[str, tuple[int, int, int, int]],
     output_dir: Path,
     ratio: float,
-) -> list[ChainNode]:
-    """处理单个从者目录，返回最终训练素材节点"""
+) -> None:
+    """处理单个从者目录，落盘最终训练素材"""
     dir_output = output_dir / servant.dir_name
 
     expand_chain: list[ChainNode] = []
@@ -275,7 +277,6 @@ def _process_work_dir(
         ).output())
 
     group = _group_of(servant.card_rarity)
-    class_chains = []
     for branch in FRAME_CONFIG[group]:
         branch_name = f"{group}_{branch['name']}"
         frame_chain = FrameChain(
@@ -285,44 +286,74 @@ def _process_work_dir(
             output_dir=dir_output,
             mask=MASK_IMG,
         )
+        frame_chain_output = frame_chain.output()
         label_chain = LabelChain(
-            frame_chain=frame_chain.output(),
+            frame_chain=frame_chain_output,
             label_list=LABEL_CONFIG[group][branch["name"]],
             output_dir=dir_output,
         )
+
+        # 边框图的训练意义已经不大 全部转为好友助战头像 添加礼装位混淆
+        # 礼装遮盖：裁剪分支的孤立产物，直接作为素材，不进入 Frame/Label 等后续分路
+        with Image.open(CRAFT_MASK_IMG) as craft_mask:
+            crop_bg_nodes = BackgroundClipChain(BG_DIR, output_size=craft_mask.size).output()
+        ExpandCropChain(
+            frame_chain=frame_chain_output,
+            bg_mask_img=CRAFT_MASK_IMG,
+            bg_nodes=crop_bg_nodes
+        ).output()
+
         status_chain = StatusChain(
             label_chain=label_chain.output(),
             status_list=STATUS_LIST,
             output_dir=dir_output,
         )
+        status_chain_output = status_chain.output()
         stars_chain = StarsChain(
-            status_chain=status_chain.output(),
+            status_chain=status_chain_output,
             output_dir=dir_output,
             stars_list=STARS_CONFIG[group][branch["name"]],
             rank_name=branch_name,
         )
-        class_chains.append(ClassChain(
-            stars_chain=stars_chain.output(),
+
+        # 一样转为混淆图
+        ExpandCropChain(
+            frame_chain=status_chain_output,
+            bg_mask_img=CRAFT_MASK_IMG,
+            bg_nodes=crop_bg_nodes
+        ).output()
+
+        stars_chain_output = stars_chain.output()
+        # 职阶徽标叠加直接在分路内执行，不再经 PostChain 汇总
+        class_chain_output = ClassChain(
+            stars_chain=stars_chain_output,
             class_list=[FG_DIR / CLASS_CONFIG[group][branch["name"]].format(servant.servant_class)],
             class_name=branch_name,
             output_dir=dir_output,
-        ))
+        ).output()
 
-    nodes = PostChain(class_chains).output()
+        # 填充边缘的透明间隙, 160 x 160 为了方便P图会留有间距
+        BackgroundChain(
+            bg_nodes=crop_bg_nodes,
+            chain=stars_chain_output
+        ).output()
+        BackgroundChain(
+            bg_nodes=crop_bg_nodes,
+            chain=class_chain_output
+        ).output()
 
     status_nodes = StatusClassifyChain(work_dir).output()
     if status_nodes:
-        nodes.extend(FaceMixChain(
+        FaceMixChain(
             status_nodes=status_nodes,
             bg_nodes=BackgroundClipChain(BG_DIR).output(),
             output_dir=dir_output,
-        ).output())
+        ).output()
     else:
         print(f"{YELLOW}[{servant.dir_name}] 无 status 图片，跳过背景混合{RESET}")
 
     # 头像原图与合成图同目录存放，供数据集按 file 直接取用
-    nodes.extend(CopyChain(FaceClassifyChain(work_dir).output(), output_dir=dir_output).output())
-    return nodes
+    CopyChain(FaceClassifyChain(work_dir).output(), output_dir=dir_output).output()
 
 
 def composite(
@@ -332,8 +363,8 @@ def composite(
     record_file: Path | None = None,
     max_workers: int | None = None,
     db_path: Path | None = None,
-) -> list[ChainNode]:
-    """遍历 input_dir 子目录执行合成流水线，返回全部最终素材节点"""
+) -> None:
+    """遍历 input_dir 子目录执行合成流水线"""
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     record_file = Path(record_file) if record_file is not None else TEMP_DIR / "composite.json"
@@ -378,12 +409,11 @@ def composite(
     print(f"线程数: {max_workers or '自动'}, 输出目录: {output_dir}, 记录文件: {record_file}")
 
     if not pending:
-        return []
+        return
 
     ratio = _mask_ratio(MASK_IMG)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    nodes: list[ChainNode] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
@@ -394,10 +424,8 @@ def composite(
         }
         for future in as_completed(futures):
             dir_name = futures[future]
-            produced = future.result()
+            future.result()  # 触发子任务异常传播
             record.mark_completed(dir_name)
-            nodes.extend(produced)
-            print(f"  [{dir_name}] 完成: {len(produced)} 张合成图")
+            print(f"  [{dir_name}] 完成")
 
-    print(f"\n总计: {len(nodes)} 张合成图已输出到 {output_dir}")
-    return nodes
+    print(f"\n总计: 完成 {len(pending)} 个目录，已输出到 {output_dir}")
