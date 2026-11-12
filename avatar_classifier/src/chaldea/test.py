@@ -382,7 +382,7 @@ class TestUnit(unittest.TestCase):
 
         chain = NarrowFigureCraftChain(
             class_chain=cards,
-            crop_mask=RES_DIR / "foreground_support" / "礼装掩码.png",
+            crop_mask=RES_DIR / "mask" / "礼装位置掩码.png",
             size=3,
             output_dir=output_dir,
         )

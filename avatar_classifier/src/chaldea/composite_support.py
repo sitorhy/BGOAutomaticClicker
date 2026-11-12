@@ -10,6 +10,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
+from PIL import Image
+
 from chaldea.chain import (
     ChainNode,
     NarrowFigureClassifyChain,
@@ -18,8 +20,7 @@ from chaldea.chain import (
     NarrowFigureLabelChain,
     NarrowFigureStarsChain,
     NarrowFigureClassChain,
-    NarrowFigureCraftChain,
-    PostChain,
+    NarrowFigureCraftChain, BackgroundClipChain, BackgroundChain, UnlinkChain, CopyChain,
 )
 from chaldea.composite import (
     CompositeRecord,
@@ -30,15 +31,13 @@ from chaldea.composite import (
     _group_of,
     _servant_id_of,
 )
-from chaldea.config import RES_DIR, TEMP_DIR
+from chaldea.config import RES_DIR, TEMP_DIR, BG_DIR
 
 FG_DIR = RES_DIR / "foreground_support"
-CRAFT_MASK = FG_DIR / "礼装掩码.png"
+CRAFT_MASK = RES_DIR / "mask" / "助战礼装位置掩码.png"
 
 # 立绘 148x375 落在 170x400 画布上的居中偏移
 CHAIN_OFFSET = (11, 12)
-# 礼装合成每个从者随机挑选的背景张数，即每张卡面的礼装变体数
-CRAFT_SIZE = 1
 
 # 背景分路：每个稀有度一组分支，分支名 -> L0 背景图
 FRAME_CONFIG: dict[str, dict[str, Path]] = {
@@ -151,9 +150,15 @@ def _process_work_dir(servant: Servant, work_dir: Path, output_dir: Path) -> lis
     """处理单个从者目录，返回最终训练素材节点"""
     dir_output = output_dir / servant.dir_name
 
+    craft_mask = Image.open(CRAFT_MASK).convert("L")
+
+    bg_nodes = BackgroundClipChain(BG_DIR, output_size=craft_mask.size).output()
+
     narrow_figure_chain = NarrowFigureClassifyChain(work_dir).output()
+    # 把助战立绘原图复制到目标目录，供数据集按 file 直接取用
+    CopyChain(narrow_figure_chain, output_dir=dir_output).output()
     group = _group_of(servant.card_rarity)
-    class_chains = []
+    cards: list[ChainNode] = []
     for branch_name, frame in FRAME_CONFIG[group].items():
         rank_name = f"{group}_{branch_name}"
         frame_chain = NarrowFigureFrameChain(
@@ -173,27 +178,54 @@ def _process_work_dir(servant: Servant, work_dir: Path, output_dir: Path) -> lis
             label_list=LABEL_LIST,
             output_dir=dir_output,
         ).output()
+
         stars_chain = NarrowFigureStarsChain(
             label_chain=label_chain,
             stars_list=STARS_CONFIG[group][branch_name],
             rank_name=rank_name,
             output_dir=dir_output,
         ).output()
-        class_chains.append(NarrowFigureClassChain(
+
+        # 移除价值不大的中间产物
+        UnlinkChain(frame_chain).output()
+        UnlinkChain(label_chain).output()
+
+        BackgroundChain(
+            bg_nodes=bg_nodes,
+            chain=border_chain
+        ).output()
+
+        # 卡面直接在分路内 output 累积，不再经 PostChain 汇总
+        cards.extend(NarrowFigureClassChain(
             stars_chain=stars_chain,
             class_list=[FG_DIR / CLASS_CONFIG[group][branch_name].format(servant.servant_class)],
             class_name=rank_name,
             output_dir=dir_output,
-        ))
+        ).output())
+
+        BackgroundChain(
+            bg_nodes=bg_nodes,
+            chain=stars_chain
+        ).output()
 
     # 卡面只是礼装合成的底板，不作为最终素材返回
-    cards = PostChain(class_chains).output()
     craft_nodes = NarrowFigureCraftChain(
         class_chain=cards,
         crop_mask=CRAFT_MASK,
-        size=CRAFT_SIZE,
+        bg_nodes=bg_nodes,
         output_dir=dir_output,
     ).output()
+
+    BackgroundChain(
+        bg_nodes=bg_nodes,
+        chain=cards
+    ).output()
+
+    BackgroundChain(
+        bg_nodes=bg_nodes,
+        chain=craft_nodes
+    ).output()
+
     return craft_nodes
 
 
@@ -270,3 +302,9 @@ def composite_support(
 
     print(f"\n总计: {len(nodes)} 张礼装合成图已输出到 {output_dir}")
     return nodes
+
+def main():
+    composite_support(sub_dir_filter = lambda dir_name: dir_name == '3')
+
+if __name__ == "__main__":
+    main()

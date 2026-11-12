@@ -186,24 +186,20 @@ def train(images_dir: Path, output_path: Path, label_map: list[Servant], args) -
     train_loader, val_loader = build_loaders(label_map, images_dir, model, args)
 
     print(f"\n开始微调（device={DEVICE}, epochs={args.epochs}, batch={args.batch_size}, lr={args.lr}）...")
-    best_acc, best_epoch = 0.0, 0
     started = time.perf_counter()
     for epoch in range(1, args.epochs + 1):
         loss, train_acc = model.train_epoch(train_loader)
-        val_acc, _ = model.evaluate(val_loader)
-        if val_acc > best_acc:
-            best_acc, best_epoch = val_acc, epoch
-            torch.save(model.model.state_dict(), output_path / MODEL_FILE)
+        val_acc, per_class = model.evaluate(val_loader)
         print(f"Epoch {epoch:>3}/{args.epochs}  loss={loss:.4f}  train_acc={train_acc:.4f}  "
-              f"val_acc={val_acc:.4f}  best={best_acc:.4f}(e{best_epoch})  "
-              f"用时 {time.perf_counter() - started:.0f}s")
+              f"val_acc={val_acc:.4f}  用时 {time.perf_counter() - started:.0f}s")
 
-    print(f"\n✓ 最佳验证准确率 {best_acc:.4f}（第 {best_epoch} 轮），权重已存到 {output_path / MODEL_FILE}")
+    # 不再按验证准确率挑检查点：验证集很小且很快饱和到 1.0000，挑出来的"最佳"轮次
+    # 只反映抽样噪声，反而丢掉了后面继续收敛的权重
+    torch.save(model.model.state_dict(), output_path / MODEL_FILE)
+    print(f"\n✓ 最后一轮权重已存到 {output_path / MODEL_FILE}")
 
-    model.model.load_state_dict(torch.load(output_path / MODEL_FILE, map_location=DEVICE, weights_only=True))
-    val_acc, per_class = model.evaluate(val_loader)
     worst = sorted(per_class.items(), key=lambda kv: kv[1][1] / kv[1][0])[:args.show_classes]
-    print(f"\n重载最佳权重后验证准确率: {val_acc:.4f}")
+    print(f"验证准确率: {val_acc:.4f}")
     print(f"验证准确率最低的 {len(worst)} 类:")
     for label_idx, (cnt, ok) in worst:
         servant = label_map[label_idx]

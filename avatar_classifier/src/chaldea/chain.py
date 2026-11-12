@@ -107,6 +107,7 @@ class UnlinkChain(Chain):
         for node in self.nodes:
             if node.image_path is not None and isinstance(node.image_path, Path):
                 node.image_path.unlink(missing_ok=True)
+                print(f"Deleted {node.image_path}")
         self.nodes = []
         return []
 
@@ -832,40 +833,35 @@ class NarrowFigureCraftChain(Chain):
             self,
             class_chain: list[ChainNode],
             crop_mask: Path,
+            bg_nodes: list[ChainNode],
             background_list: list[Path] | None = None,
-            size: int = 10,
             output_dir: Path = TEMP_DIR,
     ):
         super().__init__()
         self.class_chain = class_chain
         self.crop_mask = Path(crop_mask)
         self.background_list = background_list
-        self.size = size
         self.output_dir = Path(output_dir)
+        self.bg_nodes = bg_nodes
 
     def _tiles(self) -> list[Image.Image]:
         """随机挑背景，按掩码画布尺寸裁一块并把掩码亮度设为 alpha"""
-        bg_paths = self.background_list
-        if bg_paths is None:
-            bg_paths = sorted(
-                p for p in BG_DIR.iterdir()
-                if p.is_file() and p.suffix.lower() in {'.png', '.jpg', '.jpeg'}
-            )
         mask = Image.open(self.crop_mask)
         mask_w, mask_h = mask.size
 
         tiles = []
-        for bg_path in random.sample(list(bg_paths), min(self.size, len(bg_paths))):
-            with Image.open(bg_path) as bg_img:
-                bg_img = bg_img.convert("RGBA")
-                if bg_img.width < mask_w or bg_img.height < mask_h:
-                    scale = max(mask_w / bg_img.width, mask_h / bg_img.height)
-                    bg_img = bg_img.resize(
-                        (round(bg_img.width * scale), round(bg_img.height * scale)),
-                        Image.Resampling.LANCZOS)
-                left = random.randint(0, bg_img.width - mask_w)
-                top = random.randint(0, bg_img.height - mask_h)
-                tile = bg_img.crop((left, top, left + mask_w, top + mask_h))
+        for node in self.bg_nodes:
+            bg_img = node.image
+            bg_img = bg_img.convert("RGBA")
+            if bg_img.width < mask_w or bg_img.height < mask_h:
+                scale = max(mask_w / bg_img.width, mask_h / bg_img.height)
+                bg_img = bg_img.resize(
+                    (round(bg_img.width * scale), round(bg_img.height * scale)),
+                    Image.Resampling.LANCZOS)
+            left = random.randint(0, bg_img.width - mask_w)
+            top = random.randint(0, bg_img.height - mask_h)
+            tile = bg_img.crop((left, top, left + mask_w, top + mask_h))
+
             tile.putalpha(mask.convert("L"))
             tiles.append(tile)
         return tiles
@@ -874,13 +870,14 @@ class NarrowFigureCraftChain(Chain):
         tiles = self._tiles()
         nodes = []
         for target_idx, node in enumerate(self.class_chain):
-            for bg_idx, tile in enumerate(tiles):
-                # alpha_composite 返回新图，不污染卡面节点的缓存
-                canvas = Image.alpha_composite(node.image, tile)
+            # 随机选一张背景
+            tile_index = random.randint(0, len(tiles) - 1)
+            # alpha_composite 返回新图，不污染卡面节点的缓存
+            canvas = Image.alpha_composite(node.image, tiles[tile_index])
 
-                output_path = self.output_dir / f"{node.image_path.stem}_craft_{bg_idx}_{target_idx}.png"
-                ChainNode(canvas).save(output_path)
-                nodes.append(ChainNode(output_path))
+            output_path = self.output_dir / f"{node.image_path.stem}_craft_{target_idx}.png"
+            ChainNode(canvas).save(output_path)
+            nodes.append(ChainNode(output_path))
         return nodes
 
 
