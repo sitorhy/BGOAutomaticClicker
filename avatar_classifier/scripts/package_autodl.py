@@ -42,6 +42,7 @@ pillow>=11
 numpy>=1.26
 """
 
+# 纯字面量直接写盘，不要 .format()：shell 的 ${VAR:-default} 单个大括号就是最终形态。
 RUN_SCRIPT = """\
 #!/usr/bin/env bash
 # autoDL 全量：合成所有从者的头像卡与助战卡，然后全量微调。
@@ -50,17 +51,17 @@ set -euo pipefail
 
 PKG_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# res/assets 解压到 $RES_DIR/assets，其余资源本包已经带好
-export CHALDEA_RES_DIR="${{CHALDEA_RES_DIR:-$PKG_DIR/res}}"
+# res/assets 解压到 $CHALDEA_RES_DIR/assets，其余资源本包已经带好
+export CHALDEA_RES_DIR="${CHALDEA_RES_DIR:-$PKG_DIR/res}"
 # 全量合成有几十 GB，务必指到数据盘
-export CHALDEA_TEMP_DIR="${{CHALDEA_TEMP_DIR:-/root/autodl-tmp/temp}}"
+export CHALDEA_TEMP_DIR="${CHALDEA_TEMP_DIR:-/root/autodl-tmp/temp}"
 
 export PYTHONPATH="$PKG_DIR/src"
 export TORCH_HOME="$PKG_DIR/torch"
-export OMP_NUM_THREADS="${{OMP_NUM_THREADS:-8}}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 
-PYTHON="${{PYTHON:-python}}"
-EPOCHS="${{EPOCHS:-20}}"
+PYTHON="${PYTHON:-python}"
+EPOCHS="${EPOCHS:-20}"
 
 $PYTHON -m chaldea all
 $PYTHON -m chaldea support all
