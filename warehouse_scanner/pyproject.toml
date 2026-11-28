@@ -4,7 +4,13 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "opencv-python>=5.1.0.95",
+    "pillow>=13.0.0",
+    "rapidocr-onnxruntime>=1.4.4",
+    "scipy>=1.18.1",
+    "scipy-stubs~=1.18.1",
+]
 
 [project.scripts]
 warehouse-scanner = "warehouse_scanner:main"
